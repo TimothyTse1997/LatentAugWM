@@ -16,6 +16,12 @@ import torchaudio
 from f5_tts.model.modules import MelSpec
 from f5_tts.infer.utils_infer import *
 
+from latent_aug_wm.datasets.data_utils import (
+    F5TTSCollator,
+    batch_filter,
+    recursive_batch_filtering,
+)
+
 
 def get_ref_text_from_wav(wav_path):
     wav_path = Path(wav_path).absolute()
@@ -31,11 +37,11 @@ class MelDataset(Dataset):
     def __init__(
         self,
         ref_wav_file,
-        gen_txt_fname,
         mel_spec_kwargs={},
         sampling_rate=24000,
         tmp_dir="./tmp",
         target_rms=0.1,
+        debug=False,
     ):
         self.ref_wav_file = ref_wav_file
         self.data = self._get_all_ref_wav_text(ref_wav_file)
@@ -44,12 +50,19 @@ class MelDataset(Dataset):
         self.sampling_rate = sampling_rate
         self.tmp_dir = Path(tmp_dir)
         self.tmp_cache_files = {
-            p.name: p.absolute() for p in self.tmp_dir.glob("*.wav")
+            p.name: str(p.absolute()) for p in self.tmp_dir.glob("*.wav")
         }
         self.target_rms = target_rms
+        self.dummy_print = lambda x: None
+        self.debug = debug
 
     def _check_file_in_tmp(self, wav_fname):
-        if (self.tmp_dir / Path(wav_fname).name).absolute() in self.tmp_cache_files:
+        # cache_fname = str((self.tmp_dir / Path(wav_fname).name).absolute())
+
+        # print(self.tmp_cache_files)
+        # print("cache_fname", cache_fname)
+
+        if wav_fname in self.tmp_cache_files:
             return True
         return False
 
@@ -78,7 +91,10 @@ class MelDataset(Dataset):
         wav_fname = self.data[index]
         ref_text = get_ref_text_from_wav(wav_fname)
         ref_audio_wav, ref_text = self.preprocess_ref_audio_text(
-            ref_audio_orig, ref_text
+            index,
+            wav_fname,
+            ref_text,
+            show_info=(print if self.debug else self.dummy_print),
         )
 
         audio, sr = self.load_audio(ref_audio_wav)
@@ -104,7 +120,7 @@ class MelDataset(Dataset):
             audio_data = audio_file.read()
             audio_hash = f"index_{index}_" + Path(ref_audio_orig).name
 
-        if self._check_file_in_tmp(ref_audio_orig):
+        if self._check_file_in_tmp(audio_hash):
             show_info("Using cached preprocessed reference audio...")
             ref_audio = self.tmp_cache_files[audio_hash]
 
@@ -172,3 +188,99 @@ class MelDataset(Dataset):
                 ref_text += ". "
 
         return ref_audio, ref_text
+
+
+class TextDataset(Dataset):
+    def __init__(self, gen_txt_fname):
+        self.gen_txt_fname = gen_txt_fname
+        self.data = self._get_all_gen_text(self.gen_txt_fname)
+        pass
+
+    def _get_all_gen_text(self, gen_txt_fname):
+        with open(ref_wav_file, "r") as f:
+            text = [line.rstrip() for line in f]
+        return text
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        return self.data[index]
+
+
+def get_combine_dataloader(
+    ref_wav_file="/home/tst000/projects/datasets/selected_ref_files.txt",
+    gen_txt_fname="/home/tst000/projects/datasets/selected_gen_text.txt",
+    mel_spec_kwargs={
+        "target_sample_rate": 24000,
+        "n_mel_channels": 100,
+        "hop_length": 256,
+        "win_length": 1024,
+        "n_fft": 1024,
+        "mel_spec_type": "vocos",
+    },
+    tmp_dir="/home/tst000/projects/tmp/libriTTS",
+    shuffle=True,
+    unsorted_batch_size=256,
+    batch_size=32,
+):
+    mel_dataset = MelDataset(
+        ref_wav_file,
+        mel_spec_kwargs=mel_spec_kwargs,
+        sampling_rate=mel_spec_kwargs["target_sample_rate"],
+        tmp_dir=tmp_dir,
+        target_rms=0.1,
+    )
+    text_dataset = TextDataset(gen_txt_fname)
+    collator = F5TTSCollator()
+    mel_dataloader = DataLoader(
+        mel_dataset,
+        batch_size=unsorted_batch_size,
+        collate_fn=collator,
+        shuffle=shuffle,
+    )
+    text_dataloader = DataLoader(
+        text_dataset, batch_size=unsorted_batch_size, shuffle=shuffle
+    )
+
+    def data_iter():
+        for mel_data, text_data in zip(mel_dataloader, text_dataloader):
+            mel_data["gen_texts"] = text_data
+            for result in recursive_batch_filtering(
+                final_batch_size=batch_size, allowed_padding=100, **mel_data
+            ):
+                yield result
+
+    return data_iter()
+
+
+if __name__ == "__main__":
+    ref_wav_file = "/home/tst000/projects/datasets/selected_ref_files.txt"
+    gen_txt_fname = "/home/tst000/projects/datasets/selected_gen_text.txt"
+
+    mel_spec_kwargs = {
+        "target_sample_rate": 24000,
+        "n_mel_channels": 100,
+        "hop_length": 256,
+        "win_length": 1024,
+        "n_fft": 1024,
+        "mel_spec_type": "vocos",
+    }
+    tmp_dir = "/home/tst000/projects/tmp/libriTTS"
+
+    data_iter = get_combine_dataloader(
+        ref_wav_file=ref_wav_file,
+        gen_txt_fname=gen_txt_fname,
+        mel_spec_kwargs=mel_spec_kwargs,
+        tmp_dir="/home/tst000/projects/tmp/libriTTS",
+        shuffle=False,
+        unsorted_batch_size=256,
+        batch_size=32,
+    )
+
+    for i, result in enumerate(tqdm.tqdm(data_iter)):
+        print("lens afterward", result["lens"])
+        print(pad_sequence(result["cond"], batch_first=True).shape)
+        print("dur: ", result["durations"])
+        if i > 50:
+            break
