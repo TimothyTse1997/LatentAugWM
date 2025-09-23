@@ -15,6 +15,7 @@ import torchaudio
 
 from f5_tts.model.modules import MelSpec
 from f5_tts.infer.utils_infer import *
+from f5_tts.model.utils import convert_char_to_pinyin, get_tokenizer
 
 from latent_aug_wm.datasets.data_utils import (
     F5TTSCollator,
@@ -197,7 +198,7 @@ class TextDataset(Dataset):
         pass
 
     def _get_all_gen_text(self, gen_txt_fname):
-        with open(ref_wav_file, "r") as f:
+        with open(gen_txt_fname, "r") as f:
             text = [line.rstrip() for line in f]
         return text
 
@@ -223,6 +224,7 @@ def get_combine_dataloader(
     shuffle=True,
     unsorted_batch_size=256,
     batch_size=32,
+    allowed_padding=100,
 ):
     mel_dataset = MelDataset(
         ref_wav_file,
@@ -246,9 +248,23 @@ def get_combine_dataloader(
     def data_iter():
         for mel_data, text_data in zip(mel_dataloader, text_dataloader):
             mel_data["gen_texts"] = text_data
+
             for result in recursive_batch_filtering(
-                final_batch_size=batch_size, allowed_padding=100, **mel_data
+                final_batch_size=batch_size, allowed_padding=allowed_padding, **mel_data
             ):
+                result["lens"] = torch.tensor(result["lens"], dtype=torch.long)
+                result["durations"] = torch.tensor(
+                    result["durations"], dtype=torch.long
+                )
+                result["cond"] = pad_sequence(result["cond"], batch_first=True)
+
+                result["combine_text"] = [
+                    rt + gt for rt, gt in zip(result["ref_texts"], result["gen_texts"])
+                ]
+                result["texts"] = [
+                    sum(convert_char_to_pinyin(ct), []) for ct in result["combine_text"]
+                ]
+
                 yield result
 
     return data_iter()
@@ -280,7 +296,7 @@ if __name__ == "__main__":
 
     for i, result in enumerate(tqdm.tqdm(data_iter)):
         print("lens afterward", result["lens"])
-        print(pad_sequence(result["cond"], batch_first=True).shape)
+        # print(pad_sequence(result["cond"], batch_first=True).shape)
         print("dur: ", result["durations"])
         if i > 50:
             break
