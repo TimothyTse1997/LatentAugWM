@@ -53,6 +53,27 @@ class F5TTSBatchInferencer(F5TTS):
         generated_rebatched = self.rebatching_from_varying_length(generated, lens)
         return generated_rebatched.permute(0, 2, 1), generated.permute(0, 2, 1)
 
+    def __call__(self, cond, texts, durations, lens):
+        generated, _ = self.ema_model._sample(
+            cond=cond,
+            text=texts,
+            duration=durations,
+            lens=lens,
+            steps=self.inference_kwargs["nfe_step"],
+            cfg_strength=self.inference_kwargs["cfg_strength"],
+            sway_sampling_coef=self.inference_kwargs["sway_sampling_coef"],
+        )
+        generated_rebatched = self.rebatching_from_varying_length(generated, lens)
+        gr_wave = sampler.vocoder.decode(generated_rebatched)
+        with torch.no_grad():
+            g_wave = sampler.vocoder.decode(generated)
+
+        return {
+            "generated": generated,
+            "gr_wave": gr_wave,
+            "g_wave": g_wave,
+        }
+
 
 if __name__ == "__main__":
 

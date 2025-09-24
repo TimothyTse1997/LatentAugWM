@@ -45,10 +45,23 @@ def batch_filter(
     final_batch_size=32,
     allowed_padding=16000,
     durations=None,
+    max_duration=1500,
     **kwargs,
 ):
+
     if durations is None:
         durations = get_max_duration(lens, ref_texts, gen_texts)
+
+    index_exceed_max_dur = [i for i, d in enumerate(durations) if i > max_duration]
+
+    list_exclude_from_indexs = lambda target, indexs: [
+        t for i, t in enumerate(target) if i not in indexs
+    ]
+    lens = list_exclude_from_indexs(lens, index_exceed_max_dur)
+    cond = list_exclude_from_indexs(cond, index_exceed_max_dur)
+    ref_texts = list_exclude_from_indexs(ref_texts, index_exceed_max_dur)
+    gen_texts = list_exclude_from_indexs(gen_texts, index_exceed_max_dur)
+    durations = list_exclude_from_indexs(durations, index_exceed_max_dur)
 
     # print("current duration", durations)
     batch_size = len(durations)
