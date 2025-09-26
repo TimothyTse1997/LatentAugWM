@@ -1,3 +1,4 @@
+import random
 import json
 from pathlib import Path
 from tqdm import tqdm
@@ -139,7 +140,52 @@ def create_all_useful_text_tts_data():
             f.write(str(row) + "\n")
 
 
+def split_text_dataset(
+    input_fname,
+    output_train_fname=None,
+    output_test_fname=None,
+    output_eval_fname=None,
+    frac=0.05,
+):
+
+    with open(input_fname, "r") as f:
+        text_list = [line.rstrip() for line in f]
+
+    total_data_count = len(text_list)
+    test_eval_amount = max(int(frac * 2 * total_data_count), 2)
+    print(len(text_list))
+
+    random.shuffle(text_list)
+    train_split = text_list[:-test_eval_amount]
+    test_size = test_eval_amount // 2
+    eval_test_split = text_list[-test_eval_amount:]
+    test_split, eval_split = eval_test_split[:test_size], eval_test_split[test_size:]
+    print(len(train_split), len(test_split), len(eval_split))
+
+    def save_file_fn(save_file, all_data):
+        with open(save_file, "w") as f:
+            for row in all_data:
+                f.write(str(row) + "\n")
+
+    save_file_fn(output_train_fname, train_split)
+    save_file_fn(output_test_fname, test_split)
+    save_file_fn(output_eval_fname, eval_split)
+    # return
+
+
 if __name__ == "__main__":
     # main()
     # create_all_useful_path_for_dataset()
-    create_all_useful_text_tts_data()
+    # create_all_useful_text_tts_data()
+    # split_text_dataset(
+    #     "/home/tst000/projects/datasets/selected_ref_files.txt",
+    #     output_train_fname="/home/tst000/projects/datasets/selected_ref_files_train.txt",
+    #     output_test_fname="/home/tst000/projects/datasets/selected_ref_files_test.txt",
+    #     output_eval_fname="/home/tst000/projects/datasets/selected_ref_files_eval.txt",
+    # )
+    split_text_dataset(
+        "/home/tst000/projects/datasets/selected_gen_text.txt",
+        output_train_fname="/home/tst000/projects/datasets/selected_gen_text_train.txt",
+        output_test_fname="/home/tst000/projects/datasets/selected_gen_text_test.txt",
+        output_eval_fname="/home/tst000/projects/datasets/selected_gen_text_eval.txt",
+    )

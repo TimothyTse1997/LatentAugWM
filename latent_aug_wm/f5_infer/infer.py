@@ -74,6 +74,7 @@ class F5TTSBatchInferencer(F5TTS):
             cfg_strength=self.inference_kwargs["cfg_strength"],
             sway_sampling_coef=self.inference_kwargs["sway_sampling_coef"],
             fix_noise=fix_noise,
+            use_grad_checkpoint=(not eval),
         )
         generated_rebatched = self.rebatching_from_varying_length(
             generated, lens, duration

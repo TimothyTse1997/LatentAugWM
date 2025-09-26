@@ -45,6 +45,7 @@ class Trainer(object):
         loss_fn=None,
         log_fn=None,
         log_dir="./",
+        steps_per_epoch=None,
         **kwargs,
     ):
         self.args = args
@@ -63,6 +64,7 @@ class Trainer(object):
         self.log_fn = log_fn
 
         self.log_dir = log_dir
+        self.steps_per_epoch = steps_per_epoch
 
         Trainer._create_directory(self.log_dir)
 
@@ -285,6 +287,11 @@ class Trainer(object):
                     train_losses["train/%s" % key].append(losses[key])
             # for key in g_losses_ref:
             #    train_losses["train/%s" % key].append(g_losses_ref[key])
+            if (
+                self.steps_per_epoch is not None
+                and train_steps_per_epoch > self.steps_per_epoch
+            ):
+                break
 
         train_losses = {key: np.mean(value) for key, value in train_losses.items()}
         return train_losses

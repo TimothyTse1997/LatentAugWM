@@ -25,9 +25,10 @@ def generate_multiple_mel_from_f5tts(nets=None, step=None, eval=False, **kwargs)
     orig_noise = nets.noise_encoder.get_non_wm_latent(random_noise)
 
     # with torch.no_grad():
-    wm_out = nets.f5tts(fix_noise=wm_noise, **kwargs)
-    orig_out = nets.f5tts(fix_noise=orig_noise, **kwargs)
-    out = nets.f5tts(fix_noise=random_noise, **kwargs)
+    wm_out = nets.f5tts(fix_noise=wm_noise, use_grad_checkpoint=(not eval), **kwargs)
+    with torch.no_grad():
+        orig_out = nets.f5tts(fix_noise=orig_noise, **kwargs)
+        out = nets.f5tts(fix_noise=random_noise, **kwargs)
     # out:
     # {
     #     "generated_rebatched": generated_rebatched,
@@ -88,6 +89,23 @@ class AugApplier:
 
 
 if __name__ == "__main__":
+    from attrmap import AttrMap
+    from latent_aug_wm.model.decoder import BaseAudioSealClassifier
+    from latent_aug_wm.f5_infer.infer import F5TTSBatchInferencer
+
+    common_latent = torch.randn((2000, 100))
+
+    nets = AttrMap(
+        {
+            "noise_encoder": UniqueNoiseEncoder(common_latent).cuda().half(),
+            # "f5tts": F5TTSBatchInferencer(model="F5TTS_Small", device="cuda", train=True),
+            "f5tts": F5TTSBatchInferencer(device="cuda", train=True),
+            "detector": BaseAudioSealClassifier(input_dim=1).cuda().half(),
+        }
+    )
+    nets.f5tts.ema_model = nets.f5tts.ema_model.half()
+
+    glogger.debug("created models")
     from latent_aug_wm.datasets.mel_dataset import get_combine_dataloader
 
     ref_wav_file = "/home/tst000/projects/datasets/selected_ref_files.txt"
@@ -110,7 +128,7 @@ if __name__ == "__main__":
         tmp_dir="/home/tst000/projects/tmp/libriTTS",
         shuffle=False,
         unsorted_batch_size=256,
-        batch_size=1,
+        batch_size=16,
         allowed_padding=50,
     )
     glogger.debug("completed batching")
@@ -148,22 +166,8 @@ if __name__ == "__main__":
         log_fn_time=False,
     )
     glogger.debug("completed loss func")
-    from attrmap import AttrMap
-    from latent_aug_wm.model.decoder import BaseAudioSealClassifier
-    from latent_aug_wm.f5_infer.infer import F5TTSBatchInferencer
 
-    common_latent = torch.randn((2000, 100))
-
-    nets = AttrMap(
-        {
-            "noise_encoder": UniqueNoiseEncoder(common_latent).cuda(),
-            "f5tts": F5TTSBatchInferencer(device="cuda", train=True),
-            "detector": BaseAudioSealClassifier(input_dim=1).cuda().half(),
-        }
-    )
     nets.f5tts.ema_model = nets.f5tts.ema_model.half()
-
-    glogger.debug("created models")
 
     with torch.cuda.amp.autocast():
         _ = loss_fn(nets, {}, batch, 0, eval=False)
