@@ -24,6 +24,7 @@ class F5TTSBatchInferencer(F5TTS):
             "cfg_strength": 2,
             "nfe_step": 32,
         },
+        train=False,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -32,47 +33,62 @@ class F5TTSBatchInferencer(F5TTS):
             param.requires_grad = False
         for param in self.vocoder.parameters():
             param.requires_grad = False
+        if train:
+            self.vocoder = self.vocoder.half()
         pass
 
-    def rebatching_from_varying_length(self, generated, lens):
+    def update_wm_function(self, use_wm=True):
+        self.ema_model.use_wm = use_wm
+
+    def rebatching_from_varying_length(self, generated, lens, duration):
         mels_removed_cond = []
-        for mel, length in zip(generated, lens):
-            mels_removed_cond.append(mel[length:, :])
+        for mel, length, dur in zip(generated, lens, duration):
+            mels_removed_cond.append(mel[length:dur, :])
         return pad_sequence(mels_removed_cond, batch_first=True)
 
-    def sample(self, cond, texts, durations, lens):
+    def sample(self, cond, text, duration, lens, fix_noise=None):
         generated, _ = self.ema_model._sample(
             cond=cond,
-            text=texts,
-            duration=durations,
+            text=text,
+            duration=duration,
             lens=lens,
             steps=self.inference_kwargs["nfe_step"],
             cfg_strength=self.inference_kwargs["cfg_strength"],
             sway_sampling_coef=self.inference_kwargs["sway_sampling_coef"],
+            fix_noise=fix_noise,
         )
-        generated_rebatched = self.rebatching_from_varying_length(generated, lens)
+        generated_rebatched = self.rebatching_from_varying_length(
+            generated, lens, duration
+        )
         return generated_rebatched.permute(0, 2, 1), generated.permute(0, 2, 1)
 
-    def __call__(self, cond, texts, durations, lens):
+    def __call__(
+        self, cond, text, duration, lens, fix_noise=None, eval=False, **kwargs
+    ):
         generated, _ = self.ema_model._sample(
             cond=cond,
-            text=texts,
-            duration=durations,
+            text=text,
+            duration=duration,
             lens=lens,
             steps=self.inference_kwargs["nfe_step"],
             cfg_strength=self.inference_kwargs["cfg_strength"],
             sway_sampling_coef=self.inference_kwargs["sway_sampling_coef"],
+            fix_noise=fix_noise,
         )
-        generated_rebatched = self.rebatching_from_varying_length(generated, lens)
-        gr_wave = sampler.vocoder.decode(generated_rebatched)
-        with torch.no_grad():
-            g_wave = sampler.vocoder.decode(generated)
+        generated_rebatched = self.rebatching_from_varying_length(
+            generated, lens, duration
+        )
+        gr_wave = self.vocoder.decode(generated_rebatched.permute(0, 2, 1))
 
-        return {
-            "generated": generated,
+        result = {
+            "generated_rebatched": generated_rebatched,
             "gr_wave": gr_wave,
-            "g_wave": g_wave,
         }
+        if not eval:
+            return result
+        with torch.no_grad():
+            result["g_wave"] = self.vocoder.decode(generated.permute(0, 2, 1))
+        return result
 
 
 if __name__ == "__main__":
@@ -113,7 +129,7 @@ if __name__ == "__main__":
     generated_rebatched, generated = sampler.sample(
         cond=batch["cond"].cuda(),
         texts=batch["texts"],
-        durations=batch["durations"].cuda(),
+        duration=batch["duration"].cuda(),
         lens=batch["lens"].cuda(),
     )
     for i, (gr, g) in enumerate(zip(generated_rebatched, generated)):
@@ -128,8 +144,8 @@ if __name__ == "__main__":
 
         save_spectrogram(gr.detach().cpu(), f"{i}_gr_mel.png")
         sampler.export_wav(gr_wave, f"{i}_gr.wav")
-        save_text(batch["combine_text"][i], f"{i}_gr_text.txt")
+        save_text(batch["gen_texts"][i], f"{i}_gr_text.txt")
 
         save_spectrogram(g.detach().cpu(), f"{i}_g_mel.png")
         sampler.export_wav(g_wave, f"{i}_g.wav")
-        save_text(batch["gen_texts"][i], f"{i}_g_text.txt")
+        save_text(batch["combine_texts"][i], f"{i}_g_text.txt")

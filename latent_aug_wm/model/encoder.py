@@ -33,7 +33,59 @@ class BasicEncoder(nn.Module):
         return current_noise
 
 
+class UniqueNoiseEncoder(nn.Module):
+    # set an initial noise such that there is something to compare with
+    # (prevent the model to generate gibberish)
+    def __init__(
+        self,
+        common_latent,
+        num_channel=100,
+        max_length=2000,
+        initialize_magnitude=0.001,
+        **kwargs
+    ):
+        super().__init__()
+        self.num_channel = num_channel
+        self.max_length = max_length
+        self.common_latent = common_latent
+        self.special_latent = torch.nn.Parameter(
+            torch.randn(self.max_length, self.num_channel) * initialize_magnitude,
+            requires_grad=True,
+        )
+        assert self.common_latent.shape == self.special_latent.shape
+
+    def forward(self, x):
+        batch_size, seq_length, num_channel = x.shape
+        common_latent = self.common_latent.to(x.device).type(x.dtype)
+
+        assert num_channel == self.num_channel
+        assert seq_length <= self.max_length
+        # current_noise = torch.stack([torch.clone(self.special_latent) for _ in range(batch_size)])
+        current_noise = (
+            (self.special_latent + common_latent).unsqueeze(0).repeat(batch_size, 1, 1)
+        )
+
+        current_noise = current_noise[:, :seq_length, :]
+        return current_noise
+
+    def get_non_wm_latent(self, x):
+        # created for contraining generation range
+        batch_size, seq_length, num_channel = x.shape
+        common_latent = self.common_latent.to(x.device).type(x.dtype)
+
+        assert num_channel == self.num_channel
+        assert seq_length <= self.max_length
+        # current_noise = torch.stack([torch.clone(self.special_latent) for _ in range(batch_size)])
+        current_noise = common_latent.unsqueeze(0).repeat(batch_size, 1, 1)
+
+        current_noise = current_noise[:, :seq_length, :]
+        return current_noise
+
+
 if __name__ == "__main__":
+    common_latent = torch.randn((2000, 100))
+    noise_update_fn = UniqueNoiseEncoder(common_latent).half().cuda()
+
     from latent_aug_wm.datasets.mel_dataset import get_combine_dataloader
 
     ref_wav_file = "/home/tst000/projects/datasets/selected_ref_files.txt"
@@ -64,12 +116,15 @@ if __name__ == "__main__":
 
     from latent_aug_wm.f5_infer.infer import F5TTSBatchInferencer
 
-    noise_update_fn = BasicEncoder().cuda().half()
-    sampler = F5TTSBatchInferencer(device="cuda", noise_update_fn=noise_update_fn)
+    sampler = F5TTSBatchInferencer(
+        device="cuda", noise_update_fn=noise_update_fn, train=True
+    )
 
-    generated_rebatched, generated = sampler.sample(
+    generated_dict = sampler(
         cond=batch["cond"].cuda(),
         texts=batch["texts"],
         durations=batch["durations"].cuda(),
         lens=batch["lens"].cuda(),
     )
+    for k, v in generated_dict.items():
+        print(k, v.shape)

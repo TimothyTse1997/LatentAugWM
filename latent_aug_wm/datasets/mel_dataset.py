@@ -253,16 +253,15 @@ def get_combine_dataloader(
                 final_batch_size=batch_size, allowed_padding=allowed_padding, **mel_data
             ):
                 result["lens"] = torch.tensor(result["lens"], dtype=torch.long)
-                result["durations"] = torch.tensor(
-                    result["durations"], dtype=torch.long
-                )
+                result["duration"] = torch.tensor(result["durations"], dtype=torch.long)
                 result["cond"] = pad_sequence(result["cond"], batch_first=True)
 
-                result["combine_text"] = [
+                result["combine_texts"] = [
                     rt + gt for rt, gt in zip(result["ref_texts"], result["gen_texts"])
                 ]
-                result["texts"] = [
-                    sum(convert_char_to_pinyin(ct), []) for ct in result["combine_text"]
+                result["text"] = [
+                    sum(convert_char_to_pinyin(ct), [])
+                    for ct in result["combine_texts"]
                 ]
 
                 yield result
