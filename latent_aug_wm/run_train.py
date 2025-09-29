@@ -105,4 +105,5 @@ if __name__ == "__main__":
     kwargs = (
         training_dict["training_kwargs"] if training_dict["training_kwargs"] else {}
     )
-    training_dict["trainer"].fit(*training_dict["training_args"], **kwargs)
+    # training_dict["trainer"].fit(*training_dict["training_args"], **kwargs)
+    training_dict["trainer"].fit(**kwargs)

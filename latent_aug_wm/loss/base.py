@@ -47,8 +47,8 @@ def generate_multiple_mel_from_f5tts(nets=None, step=None, eval=False, **kwargs)
 
 # TODO normalize the loss by duration!!
 def mel_reg_L1_loss(nets=None, step=None, scale=None, **kwargs):
-    original_mel = kwargs["orig_generated_rebatched"]
-    watermark_mel = kwargs["wm_generated_rebatched"]
+    original_mel = kwargs["orig_generated_rebatched_mel"]
+    watermark_mel = kwargs["wm_generated_rebatched_mel"]
 
     mel_reg_loss = l1_loss(watermark_mel, original_mel)
     if scale is not None:

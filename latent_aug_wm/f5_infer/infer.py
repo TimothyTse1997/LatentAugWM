@@ -82,7 +82,7 @@ class F5TTSBatchInferencer(F5TTS):
         gr_wave = self.vocoder.decode(generated_rebatched.permute(0, 2, 1))
 
         result = {
-            "generated_rebatched": generated_rebatched,
+            "generated_rebatched_mel": generated_rebatched,
             "gr_wave": gr_wave,
         }
         if not eval:

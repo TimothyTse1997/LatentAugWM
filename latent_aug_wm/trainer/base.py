@@ -44,8 +44,10 @@ class Trainer(object):
         log_audio_batchs=10,
         loss_fn=None,
         log_fn=None,
+        metrics=None,
         log_dir="./",
-        steps_per_epoch=None,
+        best_measure_by_metric="f1",
+        metric_measurement="highest",  # or lowest
         **kwargs,
     ):
         self.args = args
@@ -62,9 +64,12 @@ class Trainer(object):
         self.log_audio_batchs = log_audio_batchs
         self.loss_fn = loss_fn
         self.log_fn = log_fn
+        self.metrics = metrics
+        self.best_measure_by_metric = best_measure_by_metric
+        self.best_eval_result = None
+        self.metric_measurement = metric_measurement
 
         self.log_dir = log_dir
-        self.steps_per_epoch = steps_per_epoch
 
         Trainer._create_directory(self.log_dir)
 
@@ -89,8 +94,8 @@ class Trainer(object):
 
     @staticmethod
     def _config_tensorboard(log_dir):
-        if not osp.exists(log_dir):
-            os.makedirs(log_dir, exist_ok=True)
+        if not Path(log_dir).exists():
+            Path(log_dir).mkdir(parents=True, exist_ok=True)
         writer = SummaryWriter(log_dir + "/tensorboard")
         return writer
 
@@ -239,11 +244,13 @@ class Trainer(object):
                 loss, losses_ref, used_modules = self.loss_fn(
                     self.model, self.args.loss_weights, batch, self.epochs, eval=False
                 )
+            del _
             scaler.scale(loss).backward()
         else:
             loss, losses_ref, used_modules = self.loss_fn(
                 self.model, self.args.loss_weights, batch, eval=False
             )
+            del _
             loss.backward()
         del loss
 
@@ -265,7 +272,6 @@ class Trainer(object):
         return losses_ref
 
     def _train_epoch(self):
-        self.epochs += 1
 
         train_losses = defaultdict(list)
         _ = [self.model[k].train() for k in self.model]
@@ -285,27 +291,31 @@ class Trainer(object):
             for losses in loss_items:
                 for key in losses:
                     train_losses["train/%s" % key].append(losses[key])
+                    self.writer.add_scalar("train/%s" % key, losses[key], self.steps)
             # for key in g_losses_ref:
             #    train_losses["train/%s" % key].append(g_losses_ref[key])
-            if (
-                self.steps_per_epoch is not None
-                and train_steps_per_epoch > self.steps_per_epoch
-            ):
+
+            self.steps += 1
+
+            if self.args.get(
+                "steps_per_epoch"
+            ) is not None and train_steps_per_epoch > self.args.get("steps_per_epoch"):
                 break
 
         train_losses = {key: np.mean(value) for key, value in train_losses.items()}
+        self.epochs += 1
         return train_losses
 
     @torch.no_grad()
     def _eval_step(self, batch):
 
-        loss, losses_ref, _ = self.loss_fn(
+        loss, losses_ref, _, batch_output = self.loss_fn(
             self.model, self.args.loss_weights, batch, self.epochs, eval=True
         )
 
-        batch = {k: v.detach() for k, v in batch.items()}
+        batch = {k: (v.detach() if torch.is_tensor(v) else v) for k, v in batch.items()}
 
-        return losses_ref
+        return loss, losses_ref, batch_output
 
     @torch.no_grad()
     def _eval_epoch(self):
@@ -333,47 +343,57 @@ class Trainer(object):
                     for k, v in batch.items()
                 }
 
-            loss_items = self._eval_step(batch)
+            loss, loss_items, batch_output = self._eval_step(batch)
+
+            eval_losses["total_loss"].append(loss.detach.cpu())
 
             for losses in loss_items:
                 for key in losses:
                     eval_losses["eval/%s" % key].append(losses[key])
 
-                # audios.update(audio)
-                # mels.update(mel)
+            # metric and logging
+            if self.metrics is not None:
+                self.metrics.step_process(batch)
+
+            if eval_steps_per_epoch < self.log_audio_batchs and self.log_fn is not None:
+                self.log_fn(
+                    self.writer, batch_output, self.epochs, eval_steps_per_epoch
+                )
 
         eval_losses = {key: np.mean(value) for key, value in eval_losses.items()}
-        eval_losses.update(eval_images)
 
-        return eval_losses, audios, mels, figure
+        # compute metrics
+        if self.metrics is not None:
+            metrics_outcome = self.metrics.write(self.writer, self.epochs)
+            eval_losses.update(metrics_outcome)
+
+        return eval_losses
 
     def fit(self):
+        save_checkpoint = True
         for _ in trange(1, self.args.get("epochs", 100) + 1):
             epoch = self.epochs
             train_results = self._train_epoch()
-            eval_results, audios, mels, figs = self._eval_epoch()
-            results = train_results.copy()
-            results.update(eval_results)
+            eval_results = self._eval_epoch()
             self.logger.info("--- epoch %d ---" % epoch)
-            for key, value in results.items():
-                if isinstance(value, float):
-                    self.logger.info("%-15s: %.4f" % (key, value))
-                    self.writer.add_scalar(key, value, epoch)
-                else:
-                    for v in value:
-                        self.writer.add_figure("eval_spec", v, epoch)
-            if audios and mels:
-                for k, v in audios.items():
-                    self.writer.add_audio(
-                        k, v, epoch, self.args.get("sample_rate", 22050)
-                    )
-                for k, v in mels.items():
-                    self.writer.add_figure(
-                        k, v, epoch, self.args.get("sample_rate", 22050)
-                    )
-            if figs:
-                for k, v in figs.items():
-                    self.writer.add_figure(k, v, epoch)
 
-            if (epoch % self.args.get("save_freq", 1)) == 0:
+            if self.best_measure_by_metric is not None:
+                if self.best_eval_result is None:
+                    self.best_eval_result = eval_results[self.best_measure_by_metric]
+                elif (
+                    self.metric_measurement
+                    == "highest" & self.best_eval_result
+                    > eval_results[self.best_measure_by_metric]
+                ):
+                    self.logger(
+                        f"not saving checkingpoint in {self.epochs}, as the {self.best_measure_by_metric} {eval_results[self.best_measure_by_metric]} is lower then {self.best_eval_result}"
+                    )
+                    save_checkpoint = False
+                elif self.best_eval_result < eval_results[self.best_measure_by_metric]:
+                    self.logger(
+                        f"not saving checkingpoint in {self.epochs}, as the {self.best_measure_by_metric} {eval_results[self.best_measure_by_metric]} is higher then {self.best_eval_result}"
+                    )
+                    save_checkpoint = False
+
+            if (epoch % self.args.get("save_freq", 1)) == 0 and save_checkpoint:
                 self.save_checkpoint(osp.join(self.log_dir, "epoch_%05d.pth" % epoch))
