@@ -7,6 +7,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+# from torch.nn.utils.parametrizations import weight_norm
+from torch import linalg as LA
+
 
 class BasicEncoder(nn.Module):
     # Simple latent editting
@@ -48,6 +51,7 @@ class UniqueNoiseEncoder(nn.Module):
         self.num_channel = num_channel
         self.max_length = max_length
         self.common_latent = common_latent
+        self.initialize_magnitude = initialize_magnitude
         self.special_latent = torch.nn.Parameter(
             torch.randn(self.max_length, self.num_channel) * initialize_magnitude,
             requires_grad=True,
@@ -79,6 +83,52 @@ class UniqueNoiseEncoder(nn.Module):
         current_noise = common_latent.unsqueeze(0).repeat(batch_size, 1, 1)
 
         current_noise = current_noise[:, :seq_length, :]
+        return current_noise
+
+
+class UniqueNoiseEncoderRemoveLen(UniqueNoiseEncoder):
+    # remove noise thats at the reference audio
+    # also use weight norm as regularization
+
+    def forward(self, x, lens):
+        batch_size, seq_length, num_channel = x.shape
+        common_latent = self.common_latent.to(x.device).type(x.dtype)
+
+        assert num_channel == self.num_channel
+        assert seq_length <= self.max_length
+        # current_noise = torch.stack([torch.clone(self.special_latent) for _ in range(batch_size)])
+
+        special_latent = (
+            self.initialize_magnitude
+            * self.special_latent
+            / LA.norm(self.special_latent)
+        )
+
+        current_noise = (
+            self.special_latent
+            + common_latent  # .unsqueeze(0).repeat(batch_size, 1, 1)
+        )
+
+        # current_noise = current_noise[:, :seq_length, :]
+        for batch_id, length in enumerate(lens):
+            current_seq_length = seq_length - length
+            x[batch_id, length:] = current_noise[:current_seq_length]
+        return current_noise
+
+    def get_non_wm_latent(self, x, lens):
+        # created for contraining generation range
+        batch_size, seq_length, num_channel = x.shape
+        common_latent = self.common_latent.to(x.device).type(x.dtype)
+
+        assert num_channel == self.num_channel
+        assert seq_length <= self.max_length
+        # current_noise = torch.stack([torch.clone(self.special_latent) for _ in range(batch_size)])
+        current_noise = common_latent.unsqueeze(0)  # .repeat(batch_size, 1, 1)
+
+        current_noise = current_noise[:, :seq_length, :]
+        for batch_id, length in enumerate(lens):
+            current_seq_length = seq_length - length
+            x[batch_id, length:] = current_noise[:current_seq_length]
         return current_noise
 
 
