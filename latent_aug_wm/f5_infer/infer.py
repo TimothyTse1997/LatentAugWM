@@ -1,7 +1,9 @@
 import json
 from pathlib import Path
+from importlib.resources import files
 from tqdm import tqdm
 from functools import partial
+from cached_path import cached_path
 
 import numpy as np
 import torch
@@ -9,8 +11,11 @@ from torch.nn.utils.rnn import pad_sequence
 
 from datasets import load_dataset
 
+from omegaconf import OmegaConf
+from hydra.utils import get_class
+
 from f5_tts.api import F5TTS
-from f5_tts.infer.utils_infer import save_spectrogram
+from f5_tts.infer.utils_infer import save_spectrogram, load_model
 
 
 class F5TTSBatchInferencer(F5TTS):
@@ -25,16 +30,23 @@ class F5TTSBatchInferencer(F5TTS):
             "nfe_step": 32,
         },
         train=False,
+        custum_vocoder=None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.inference_kwargs = inference_kwargs
         for param in self.ema_model.parameters():
             param.requires_grad = False
+
+        # for example, we can use griffinlim here
+        if custum_vocoder is not None:
+            self.vocoder = custum_vocoder
+
         for param in self.vocoder.parameters():
             param.requires_grad = False
         if train:
             self.vocoder = self.vocoder.half()
+
         pass
 
     def update_wm_function(self, use_wm=True):
@@ -90,6 +102,50 @@ class F5TTSBatchInferencer(F5TTS):
         with torch.no_grad():
             result["g_wave"] = self.vocoder.decode(generated.permute(0, 2, 1))
         return result
+
+
+def load_cfm(
+    model="F5TTS_v1_Base",
+    use_ema=True,
+    device="cuda",
+    ode_method="euler",
+    vocab_file="",
+    hf_cache_dir=None,
+):
+    model_cfg = OmegaConf.load(str(files("f5_tts").joinpath(f"configs/{model}.yaml")))
+    model_cls = get_class(f"f5_tts.model.{model_cfg.model.backbone}")
+    model_arc = model_cfg.model.arch
+    # override for previous models
+    mel_spec_type = model_cfg.model.mel_spec.mel_spec_type
+    target_sample_rate = model_cfg.model.mel_spec.target_sample_rate
+    if model == "F5TTS_Base":
+        if mel_spec_type == "vocos":
+            ckpt_step = 1200000
+        elif mel_spec_type == "bigvgan":
+            model = "F5TTS_Base_bigvgan"
+            ckpt_type = "pt"
+    elif model == "E2TTS_Base":
+        repo_name = "E2-TTS"
+        ckpt_step = 1200000
+
+    if not ckpt_file:
+        ckpt_file = str(
+            cached_path(
+                f"hf://SWivid/{repo_name}/{model}/model_{ckpt_step}.{ckpt_type}",
+                cache_dir=hf_cache_dir,
+            )
+        )
+    ema_model = load_model(
+        model_cls,
+        model_arc,
+        ckpt_file,
+        mel_spec_type,
+        vocab_file,
+        ode_method,
+        use_ema,
+        device,
+    )
+    return ema_model
 
 
 if __name__ == "__main__":
