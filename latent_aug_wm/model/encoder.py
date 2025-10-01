@@ -86,9 +86,27 @@ class UniqueNoiseEncoder(nn.Module):
         return current_noise
 
 
-class UniqueNoiseEncoderRemoveLen(UniqueNoiseEncoder):
+class UniqueNoiseEncoderRemoveLen(nn.Module):
     # remove noise thats at the reference audio
     # also use weight norm as regularization
+    def __init__(
+        self,
+        common_latent,
+        num_channel=100,
+        max_length=2000,
+        max_weight_norm=0.01,
+        **kwargs
+    ):
+        super().__init__()
+        self.num_channel = num_channel
+        self.max_length = max_length
+        self.common_latent = common_latent
+        self.max_weight_norm = max_weight_norm
+        self.special_latent = torch.nn.Parameter(
+            torch.zeros(self.max_length, self.num_channel),
+            requires_grad=True,
+        )
+        assert self.common_latent.shape == self.special_latent.shape
 
     def forward(self, x, lens):
         batch_size, seq_length, num_channel = x.shape
@@ -96,17 +114,16 @@ class UniqueNoiseEncoderRemoveLen(UniqueNoiseEncoder):
 
         assert num_channel == self.num_channel
         assert seq_length <= self.max_length
-        # current_noise = torch.stack([torch.clone(self.special_latent) for _ in range(batch_size)])
 
-        special_latent = (
-            self.initialize_magnitude
-            * self.special_latent
-            / LA.norm(self.special_latent)
-        )
+        # normalize special latent
+        special_latent = self.special_latent
+        weight_norm = LA.norm(self.special_latent)
+
+        if weight_norm > self.max_weight_norm:
+            special_latent = self.max_weight_norm * special_latent / weight_norm
 
         current_noise = (
-            self.special_latent
-            + common_latent  # .unsqueeze(0).repeat(batch_size, 1, 1)
+            special_latent + common_latent  # .unsqueeze(0).repeat(batch_size, 1, 1)
         )
 
         # current_noise = current_noise[:, :seq_length, :]
