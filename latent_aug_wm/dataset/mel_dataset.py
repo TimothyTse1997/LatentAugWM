@@ -17,7 +17,7 @@ from f5_tts.model.modules import MelSpec
 from f5_tts.infer.utils_infer import *
 from f5_tts.model.utils import convert_char_to_pinyin, get_tokenizer
 
-from latent_aug_wm.datasets.data_utils import (
+from latent_aug_wm.dataset.data_utils import (
     F5TTSCollator,
     batch_filter,
     recursive_batch_filtering,

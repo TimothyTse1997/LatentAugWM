@@ -150,7 +150,7 @@ def load_cfm(
 
 if __name__ == "__main__":
 
-    from latent_aug_wm.datasets.mel_dataset import get_combine_dataloader
+    from latent_aug_wm.dataset.mel_dataset import get_combine_dataloader
 
     ref_wav_file = "/home/tst000/projects/datasets/selected_ref_files.txt"
     gen_txt_fname = "/home/tst000/projects/datasets/selected_gen_text.txt"

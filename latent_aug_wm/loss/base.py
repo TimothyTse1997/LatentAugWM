@@ -106,7 +106,7 @@ if __name__ == "__main__":
     nets.f5tts.ema_model = nets.f5tts.ema_model.half()
 
     glogger.debug("created models")
-    from latent_aug_wm.datasets.mel_dataset import get_combine_dataloader
+    from latent_aug_wm.dataset.mel_dataset import get_combine_dataloader
 
     ref_wav_file = "/home/tst000/projects/datasets/selected_ref_files.txt"
     gen_txt_fname = "/home/tst000/projects/datasets/selected_gen_text.txt"
