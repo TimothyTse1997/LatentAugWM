@@ -52,6 +52,9 @@ class F5TTSBatchInferencer(F5TTS):
     def update_wm_function(self, use_wm=True):
         self.ema_model.use_wm = use_wm
 
+    def train(self):
+        self.vocoder = self.vocoder.half()
+
     def rebatching_from_varying_length(self, generated, lens, duration):
         mels_removed_cond = []
         for mel, length, dur in zip(generated, lens, duration):
@@ -59,6 +62,7 @@ class F5TTSBatchInferencer(F5TTS):
         return pad_sequence(mels_removed_cond, batch_first=True)
 
     def sample(self, cond, text, duration, lens, fix_noise=None):
+
         generated, _ = self.ema_model._sample(
             cond=cond,
             text=text,
@@ -69,14 +73,28 @@ class F5TTSBatchInferencer(F5TTS):
             sway_sampling_coef=self.inference_kwargs["sway_sampling_coef"],
             fix_noise=fix_noise,
         )
+        self.ema_model.transformer.clear_cache()
         generated_rebatched = self.rebatching_from_varying_length(
             generated, lens, duration
         )
         return generated_rebatched.permute(0, 2, 1), generated.permute(0, 2, 1)
 
     def __call__(
-        self, cond, text, duration, lens, fix_noise=None, eval=False, **kwargs
+        self,
+        cond,
+        text,
+        duration,
+        lens,
+        fix_noise=None,
+        use_grad_checkpoint=False,
+        eval=False,
+        cache=True,
+        **kwargs,
     ):
+        # print(cond.shape, fix_noise.shape, duration, lens)
+        # print(text)
+        self.ema_model.transformer.clear_cache()
+        assert self.ema_model.transformer.text_cond is None
         generated, _ = self.ema_model._sample(
             cond=cond,
             text=text,
@@ -86,8 +104,11 @@ class F5TTSBatchInferencer(F5TTS):
             cfg_strength=self.inference_kwargs["cfg_strength"],
             sway_sampling_coef=self.inference_kwargs["sway_sampling_coef"],
             fix_noise=fix_noise,
-            use_grad_checkpoint=(not eval),
+            use_grad_checkpoint=use_grad_checkpoint,
+            cache=cache,
         )
+        self.ema_model.transformer.clear_cache()
+        assert self.ema_model.transformer.text_cond is None
         generated_rebatched = self.rebatching_from_varying_length(
             generated, lens, duration
         )

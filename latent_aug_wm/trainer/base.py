@@ -58,7 +58,9 @@ class Trainer(object):
         self.optimizer = optimizer
         self.train_dataloader = train_dataloader
         self.val_dataloader = val_dataloader
-        self.device = torch.device(device)
+        # self.device = torch.device(device)
+        self.device = device
+
         self.finish_train = False
         self.fp16_run = fp16_run
         self.log_audio_batchs = log_audio_batchs
@@ -89,7 +91,10 @@ class Trainer(object):
     @staticmethod
     def load_attr_model_to_device(model_attr, device):
         for k, m in model_attr.items():
-            _ = m.to(device)
+            try:
+                _ = m.to(device)
+            except:
+                continue
         return device
 
     @staticmethod
@@ -120,16 +125,21 @@ class Trainer(object):
         Args:
             checkpoint_path (str): Checkpoint path to be saved.
         """
+
+        model_state_dicts = {
+            key: self.model[key].state_dict() for key in self.args.save_modules
+        }
         state_dict = {
             "optimizer": self.optimizer.state_dict(),
             "steps": self.steps,
             "epochs": self.epochs,
-            "model": {key: self.model[key].state_dict() for key in self.model},
+            "model": model_state_dicts,
         }
         if self.model_ema is not None:
-            state_dict["model_ema"] = {
-                key: self.model_ema[key].state_dict() for key in self.model_ema
+            ema_model_state_dicts = {
+                key: self.model_ema[key].state_dict() for key in self.args.save_modules
             }
+            state_dict["model_ema"] = ema_model_state_dicts
 
         if not os.path.exists(os.path.dirname(checkpoint_path)):
             os.makedirs(os.path.dirname(checkpoint_path))
@@ -215,14 +225,20 @@ class Trainer(object):
 
     @staticmethod
     def moving_average(model, model_test, beta=0.999):
-        for param, param_test in zip(model.parameters(), model_test.parameters()):
+        for param_name, param in model.parameters.items():
+            param_test = model_test.parameters[param_name]
             param_test.data = torch.lerp(param.data, param_test.data, beta)
+
+        # for param, param_test in zip(model.parameters(), model_test.parameters()):
+        #     param_test.data = torch.lerp(param.data, param_test.data, beta)
 
     def batch_detach(self, batch):
         if isinstance(batch, list) or isinstance(batch, tuple):
-            batch = [v.detach() for v in batch]
+            batch = [v.detach() if torch.is_tensor(v) else v for v in batch]
         else:
-            batch = {k: v.detach() for k, v in batch.items()}
+            batch = {
+                k: (v.detach() if torch.is_tensor(v) else v) for k, v in batch.items()
+            }
         return batch
 
     def _train_step(self, batch, scaler):
@@ -240,18 +256,21 @@ class Trainer(object):
         self.optimizer.zero_grad()
 
         if scaler is not None:
-            with torch.cuda.amp.autocast():
+            # with torch.cuda.amp.autocast():
+            with torch.autocast(device_type=self.device, dtype=torch.float16):
                 loss, losses_ref, used_modules = self.loss_fn(
                     self.model, self.args.loss_weights, batch, self.epochs, eval=False
                 )
-            del _
             scaler.scale(loss).backward()
         else:
             loss, losses_ref, used_modules = self.loss_fn(
                 self.model, self.args.loss_weights, batch, eval=False
             )
-            del _
             loss.backward()
+
+        # for n, p in self.model.noise_encoder.named_parameters():
+        #     if p.requires_grad:
+        #         print(n, p.grad.abs().mean())
         del loss
 
         for m in used_modules:
@@ -276,7 +295,7 @@ class Trainer(object):
         train_losses = defaultdict(list)
         _ = [self.model[k].train() for k in self.model]
         scaler = (
-            torch.cuda.amp.GradScaler()
+            torch.amp.GradScaler()  # self.device)
             if (("cuda" in str(self.device)) and self.fp16_run)
             else None
         )
@@ -288,12 +307,9 @@ class Trainer(object):
             gc.collect()
             loss_items = self._train_step(batch, scaler)
 
-            for losses in loss_items:
-                for key in losses:
-                    train_losses["train/%s" % key].append(losses[key])
-                    self.writer.add_scalar("train/%s" % key, losses[key], self.steps)
-            # for key in g_losses_ref:
-            #    train_losses["train/%s" % key].append(g_losses_ref[key])
+            for key in loss_items:
+                train_losses["train/%s" % key].append(loss_items[key])
+                self.writer.add_scalar("train/%s" % key, loss_items[key], self.steps)
 
             self.steps += 1
 
@@ -308,13 +324,23 @@ class Trainer(object):
 
     @torch.no_grad()
     def _eval_step(self, batch):
+        if self.fp16_run:
+            with torch.autocast(device_type=self.device, dtype=torch.float16):
+                loss, losses_ref, _, batch_output = self.loss_fn(
+                    self.model, self.args.loss_weights, batch, self.epochs, eval=True
+                )
+        else:
+            loss, losses_ref, _, batch_output = self.loss_fn(
+                self.model, self.args.loss_weights, batch, self.epochs, eval=True
+            )
 
-        loss, losses_ref, _, batch_output = self.loss_fn(
-            self.model, self.args.loss_weights, batch, self.epochs, eval=True
-        )
+        # batch = {k: (v.detach() if torch.is_tensor(v) else v) for k, v in batch.items()}
+        batch_output = {
+            k: (v.detach().float().cpu() if torch.is_tensor(v) else v)
+            for k, v in batch_output.items()
+        }
 
-        batch = {k: (v.detach() if torch.is_tensor(v) else v) for k, v in batch.items()}
-
+        del batch
         return loss, losses_ref, batch_output
 
     @torch.no_grad()
@@ -322,7 +348,7 @@ class Trainer(object):
 
         eval_losses = defaultdict(list)
         eval_images = defaultdict(list)
-        _ = [self.model[k].eval() for k in self.model]
+        _ = [self.model[k].eval() for k in self.model if hasattr(self.model[k], "eval")]
         audios, mels, figure = {}, {}, {}
 
         style_encoding, labels = [], []
@@ -345,15 +371,14 @@ class Trainer(object):
 
             loss, loss_items, batch_output = self._eval_step(batch)
 
-            eval_losses["total_loss"].append(loss.detach.cpu())
+            eval_losses["total_loss"].append(loss.detach().cpu())
 
-            for losses in loss_items:
-                for key in losses:
-                    eval_losses["eval/%s" % key].append(losses[key])
+            for key in loss_items:
+                eval_losses["eval/%s" % key].append(loss_items[key])
 
             # metric and logging
             if self.metrics is not None:
-                self.metrics.step_process(batch)
+                self.metrics.step_process(batch_output)
 
             if eval_steps_per_epoch < self.log_audio_batchs and self.log_fn is not None:
                 self.log_fn(
@@ -381,16 +406,16 @@ class Trainer(object):
                 if self.best_eval_result is None:
                     self.best_eval_result = eval_results[self.best_measure_by_metric]
                 elif (
-                    self.metric_measurement
-                    == "highest" & self.best_eval_result
+                    self.metric_measurement == "highest"
+                    and self.best_eval_result
                     > eval_results[self.best_measure_by_metric]
                 ):
-                    self.logger(
+                    self.logger.info(
                         f"not saving checkingpoint in {self.epochs}, as the {self.best_measure_by_metric} {eval_results[self.best_measure_by_metric]} is lower then {self.best_eval_result}"
                     )
                     save_checkpoint = False
                 elif self.best_eval_result < eval_results[self.best_measure_by_metric]:
-                    self.logger(
+                    self.logger.info(
                         f"not saving checkingpoint in {self.epochs}, as the {self.best_measure_by_metric} {eval_results[self.best_measure_by_metric]} is higher then {self.best_eval_result}"
                     )
                     save_checkpoint = False

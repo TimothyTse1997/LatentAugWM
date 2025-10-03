@@ -60,7 +60,7 @@ val_ref_wav_file: "/home/tst000/projects/datasets/selected_ref_files_eval.txt"
 train_gen_txt_fname: "/home/tst000/projects/datasets/selected_gen_text_train.txt"
 val_gen_txt_fname: "/home/tst000/projects/datasets/selected_gen_text_eval.txt"
 
-training_args: !new:attrmap.AttrMap
+training_args: !new:addict.Dict
   ema_modules: "detector"
   steps_per_epoch: !ref <steps_per_epoch>
   loss_weights:
@@ -102,12 +102,12 @@ f5tts: !new:latent_aug_wm.f5_infer.infer.F5TTSBatchInferencer
 detector: !new:latent_aug_wm.model.decoder.BaseAudioSealClassifier
   input_dim: 1
 
-model: !new:attrmap.AttrMap
+model: !new:addict.Dict
   noise_encoder: !ref <noise_encoder>
   f5tts: !ref <f5tts>
   detector: !ref <detector>
 
-model_ema: !new:attrmap.AttrMap
+model_ema: !new:addict.Dict
   noise_encoder: !copy <noise_encoder>
   detector: !copy <detector>
 
@@ -127,7 +127,7 @@ schduler_params:
   steps_per_epoch: !ref <steps_per_epoch>
 
 
-optimizer: !apply:nvc_net.trainer.optimizer.build_optimizer
+optimizer: !apply:latent_aug_wm.trainer.optimizer.build_optimizer
   model_dict: !ref <model>
   scheduler_params_dict:
     noise_encoder: !copy <schduler_params>

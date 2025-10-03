@@ -225,6 +225,7 @@ def get_combine_dataloader(
     unsorted_batch_size=256,
     batch_size=32,
     allowed_padding=100,
+    steps_per_epoch=3000,
 ):
     mel_dataset = MelDataset(
         ref_wav_file,
@@ -245,9 +246,33 @@ def get_combine_dataloader(
         text_dataset, batch_size=unsorted_batch_size, shuffle=shuffle
     )
 
-    def data_iter():
-        for mel_data, text_data in zip(mel_dataloader, text_dataloader):
+    class DataIter:
+        def __init__(self):
+            self.index = 0
+            self.storage = []
+            self.max_batch = min(len(mel_dataloader), len(text_dataloader))
+            pass
+
+        def __len__(self):
+            return max(self.max_batch, steps_per_epoch)
+
+        def __iter__(self):
+            self.index = 0
+            self.storage = []
+            return self
+
+        def __next__(self):
+            if self.index > steps_per_epoch:
+                raise StopIteration
+            self.index += 1
+            mel_data, text_data = next(iter(mel_dataloader)), next(
+                iter(text_dataloader)
+            )
             mel_data["gen_texts"] = text_data
+
+            if self.storage:
+                # print(len(self.storage))
+                return self.storage.pop(0)
 
             for result in recursive_batch_filtering(
                 final_batch_size=batch_size, allowed_padding=allowed_padding, **mel_data
@@ -263,10 +288,35 @@ def get_combine_dataloader(
                     sum(convert_char_to_pinyin(ct), [])
                     for ct in result["combine_texts"]
                 ]
+                self.storage.append(result)
+                # yield result
+            # print(len(self.storage))
+            return self.storage.pop(0)
 
-                yield result
+    # def data_iter():
+    #     for mel_data, text_data in zip(mel_dataloader, text_dataloader):
+    #         mel_data["gen_texts"] = text_data
 
-    return data_iter()
+    #         for result in recursive_batch_filtering(
+    #             final_batch_size=batch_size, allowed_padding=allowed_padding, **mel_data
+    #         ):
+    #             result["lens"] = torch.tensor(result["lens"], dtype=torch.long)
+    #             result["duration"] = torch.tensor(result["durations"], dtype=torch.long)
+    #             result["cond"] = pad_sequence(result["cond"], batch_first=True)
+
+    #             result["combine_texts"] = [
+    #                 rt + gt for rt, gt in zip(result["ref_texts"], result["gen_texts"])
+    #             ]
+    #             result["text"] = [
+    #                 sum(convert_char_to_pinyin(ct), [])
+    #                 for ct in result["combine_texts"]
+    #             ]
+
+    #             yield result
+    start = time.time()
+    dataiter = DataIter()
+    print("iter create time: ", time.time() - start)
+    return dataiter
 
 
 if __name__ == "__main__":
@@ -289,7 +339,7 @@ if __name__ == "__main__":
         mel_spec_kwargs=mel_spec_kwargs,
         tmp_dir="/home/tst000/projects/tmp/libriTTS",
         shuffle=False,
-        unsorted_batch_size=256,
+        unsorted_batch_size=2048,
         batch_size=32,
     )
 

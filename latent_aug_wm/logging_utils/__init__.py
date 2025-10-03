@@ -46,4 +46,4 @@ def construct_full_epoch_metrics(list_of_metric):
                 results.update(metric(writer, epoch))
             return results
 
-    return CombineMetrics
+    return CombineMetrics()

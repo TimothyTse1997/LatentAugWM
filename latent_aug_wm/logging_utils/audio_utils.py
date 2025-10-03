@@ -11,7 +11,7 @@ def log_mel_from_batch(writer, batch, epoch, batch_id, **kwargs):
     for k, v in batch.items():
         if not k.endswith("mel"):
             continue
-        log_spectrogram(writer, v[0], epoch, batch_id, k)
+        log_spectrogram(writer, v[0].permute(0, 2, 1), epoch, batch_id, k)
 
 
 def log_audio_from_batch(writer, batch, epoch, batch_id, sampling_rate=24000, **kwargs):

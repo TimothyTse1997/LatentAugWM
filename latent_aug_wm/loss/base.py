@@ -25,10 +25,16 @@ def generate_multiple_mel_from_f5tts(nets=None, step=None, eval=False, **kwargs)
     orig_noise = nets.noise_encoder.get_non_wm_latent(random_noise)
 
     # with torch.no_grad():
-    wm_out = nets.f5tts(fix_noise=wm_noise, use_grad_checkpoint=(not eval), **kwargs)
+    wm_out = nets.f5tts(
+        fix_noise=wm_noise, use_grad_checkpoint=(not eval), eval=eval, **kwargs
+    )
     with torch.no_grad():
-        orig_out = nets.f5tts(fix_noise=orig_noise, **kwargs)
-        out = nets.f5tts(fix_noise=random_noise, **kwargs)
+        orig_out = nets.f5tts(
+            fix_noise=orig_noise, use_grad_checkpoint=False, eval=eval, **kwargs
+        )
+        out = nets.f5tts(
+            fix_noise=random_noise, use_grad_checkpoint=False, eval=eval, **kwargs
+        )
     # out:
     # {
     #     "generated_rebatched": generated_rebatched,
@@ -82,7 +88,12 @@ class AugApplier:
         self.target_keys = ["rand_gr_wave", "wm_gr_wave"]
         self.aug_obj = aug_obj
 
-    def __call__(self, nets=None, step=None, scale=None, **kwargs):
+    def __call__(self, nets=None, step=None, scale=None, eval=False, **kwargs):
+        # if eval:
+        #    for k in self.target_keys:
+        #        print(kwargs[k].dtype)
+        #        kwargs[k] = kwargs[k].float()
+        #        print(kwargs[k].dtype)
         return {
             k: self.aug_obj(kwargs[k].unsqueeze(1)).squeeze(1) for k in self.target_keys
         }, []

@@ -37,8 +37,10 @@ def construct_loss_fn(list_of_fn, log_fn_time=False):
                 total_loss = total_loss + weight.get(k, 1.0) * v
                 loss_items.update({k: v.detach().item()})
         # loss, logging for loss values, module for update
+
         if not eval:
             return total_loss, loss_items, used_modules
+
         return total_loss, loss_items, used_modules, new_batch
 
     return _loss_fn

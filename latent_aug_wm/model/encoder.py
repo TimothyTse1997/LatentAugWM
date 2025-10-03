@@ -50,12 +50,15 @@ class UniqueNoiseEncoder(nn.Module):
         super().__init__()
         self.num_channel = num_channel
         self.max_length = max_length
-        self.common_latent = common_latent
+        self.common_latent = common_latent[:, : self.max_length].permute(1, 0)
+
         self.initialize_magnitude = initialize_magnitude
         self.special_latent = torch.nn.Parameter(
             torch.randn(self.max_length, self.num_channel) * initialize_magnitude,
             requires_grad=True,
         )
+        if self.common_latent.shape != self.special_latent.shape:
+            print(self.common_latent.shape, self.special_latent.shape)
         assert self.common_latent.shape == self.special_latent.shape
 
     def forward(self, x):
@@ -100,7 +103,8 @@ class UniqueNoiseEncoderRemoveLen(nn.Module):
         super().__init__()
         self.num_channel = num_channel
         self.max_length = max_length
-        self.common_latent = common_latent
+        # self.common_latent = common_latent
+        self.common_latent = common_latent[:, : self.max_length].permute(1, 0)
         self.max_weight_norm = max_weight_norm
         self.special_latent = torch.nn.Parameter(
             torch.zeros(self.max_length, self.num_channel),
