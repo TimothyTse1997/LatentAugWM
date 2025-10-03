@@ -48,6 +48,7 @@ class Trainer(object):
         log_dir="./",
         best_measure_by_metric="f1",
         metric_measurement="highest",  # or lowest
+        step_per_eval=100,
         **kwargs,
     ):
         self.args = args
@@ -70,6 +71,7 @@ class Trainer(object):
         self.best_measure_by_metric = best_measure_by_metric
         self.best_eval_result = None
         self.metric_measurement = metric_measurement
+        self.step_per_eval = step_per_eval
 
         self.log_dir = log_dir
 
@@ -241,7 +243,7 @@ class Trainer(object):
             }
         return batch
 
-    def _train_step(self, batch, scaler):
+    def _train_step(self, batch):  # , scaler):
 
         ### load data
         if isinstance(batch, list):
@@ -255,18 +257,19 @@ class Trainer(object):
 
         self.optimizer.zero_grad()
 
-        if scaler is not None:
+        if self.fp16_run:  # scaler is not None:
             # with torch.cuda.amp.autocast():
-            with torch.autocast(device_type=self.device, dtype=torch.float16):
+            # with torch.autocast(device_type=self.device, dtype=torch.float16):
+            with torch.autocast(device_type=self.device, dtype=torch.bfloat16):
                 loss, losses_ref, used_modules = self.loss_fn(
                     self.model, self.args.loss_weights, batch, self.epochs, eval=False
                 )
-            scaler.scale(loss).backward()
+            # scaler.scale(loss).backward()
         else:
             loss, losses_ref, used_modules = self.loss_fn(
                 self.model, self.args.loss_weights, batch, eval=False
             )
-            loss.backward()
+        loss.backward()
 
         # for n, p in self.model.noise_encoder.named_parameters():
         #     if p.requires_grad:
@@ -274,7 +277,8 @@ class Trainer(object):
         del loss
 
         for m in used_modules:
-            self.optimizer.step(m, scaler=scaler)
+            # self.optimizer.step(m, scaler=scaler)
+            self.optimizer.step(m)
 
         batch = self.batch_detach(batch)
         if (
@@ -294,18 +298,18 @@ class Trainer(object):
 
         train_losses = defaultdict(list)
         _ = [self.model[k].train() for k in self.model]
-        scaler = (
-            torch.amp.GradScaler()  # self.device)
-            if (("cuda" in str(self.device)) and self.fp16_run)
-            else None
-        )
+        # scaler = (
+        #     torch.amp.GradScaler()  # self.device)
+        #     if (("cuda" in str(self.device)) and self.fp16_run)
+        #     else None
+        # )
 
         for train_steps_per_epoch, batch in enumerate(
             tqdm(self.train_dataloader, desc="[train]", leave=False), 1
         ):
 
             gc.collect()
-            loss_items = self._train_step(batch, scaler)
+            loss_items = self._train_step(batch)  # , scaler)
 
             for key in loss_items:
                 train_losses["train/%s" % key].append(loss_items[key])
@@ -317,6 +321,9 @@ class Trainer(object):
                 "steps_per_epoch"
             ) is not None and train_steps_per_epoch > self.args.get("steps_per_epoch"):
                 break
+            if self.steps % self.step_per_eval == 0:
+                eval_results = self._eval_epoch(end_of_epoch=False)
+                del eval_results
 
         train_losses = {key: np.mean(value) for key, value in train_losses.items()}
         self.epochs += 1
@@ -325,7 +332,8 @@ class Trainer(object):
     @torch.no_grad()
     def _eval_step(self, batch):
         if self.fp16_run:
-            with torch.autocast(device_type=self.device, dtype=torch.float16):
+            # with torch.autocast(device_type=self.device, dtype=torch.float16):
+            with torch.autocast(device_type=self.device, dtype=torch.bfloat16):
                 loss, losses_ref, _, batch_output = self.loss_fn(
                     self.model, self.args.loss_weights, batch, self.epochs, eval=True
                 )
@@ -344,7 +352,7 @@ class Trainer(object):
         return loss, losses_ref, batch_output
 
     @torch.no_grad()
-    def _eval_epoch(self):
+    def _eval_epoch(self, end_of_epoch=False):
 
         eval_losses = defaultdict(list)
         eval_images = defaultdict(list)
@@ -382,43 +390,82 @@ class Trainer(object):
 
             if eval_steps_per_epoch < self.log_audio_batchs and self.log_fn is not None:
                 self.log_fn(
-                    self.writer, batch_output, self.epochs, eval_steps_per_epoch
+                    # self.writer, batch_output, self.epochs, eval_steps_per_epoch
+                    self.writer,
+                    batch_output,
+                    self.steps,
+                    eval_steps_per_epoch,
                 )
 
         eval_losses = {key: np.mean(value) for key, value in eval_losses.items()}
 
         # compute metrics
         if self.metrics is not None:
-            metrics_outcome = self.metrics.write(self.writer, self.epochs)
+            # metrics_outcome = self.metrics.write(self.writer, self.epochs)
+            metrics_outcome = self.metrics.write(self.writer, self.steps)
             eval_losses.update(metrics_outcome)
 
+        _ = [self.model[k].train() for k in self.model]
+
+        if not end_of_epoch:
+            self.check_eval_and_save_checkpoint(eval_losses)
+
         return eval_losses
+
+    def check_eval_and_save_checkpoint(self, eval_results):
+
+        save_checkpoint = True
+
+        if self.best_measure_by_metric is not None:
+            if self.best_eval_result is None:
+                self.best_eval_result = eval_results[self.best_measure_by_metric]
+            elif (
+                self.metric_measurement == "highest"
+                and self.best_eval_result > eval_results[self.best_measure_by_metric]
+            ):
+                self.logger.info(
+                    f"not saving checkingpoint in {self.epochs}, as the {self.best_measure_by_metric} {eval_results[self.best_measure_by_metric]} is lower then {self.best_eval_result}"
+                )
+                save_checkpoint = False
+            elif self.best_eval_result < eval_results[self.best_measure_by_metric]:
+                self.logger.info(
+                    f"not saving checkingpoint in {self.epochs}, as the {self.best_measure_by_metric} {eval_results[self.best_measure_by_metric]} is higher then {self.best_eval_result}"
+                )
+                save_checkpoint = False
+
+        if save_checkpoint:
+            self.save_checkpoint(
+                osp.join(
+                    self.log_dir,
+                    f"epoch_{self.epochs}_step_{self.steps}_best_{self.best_measure_by_metric}.pth",
+                )
+            )
 
     def fit(self):
         save_checkpoint = True
         for _ in trange(1, self.args.get("epochs", 100) + 1):
             epoch = self.epochs
             train_results = self._train_epoch()
-            eval_results = self._eval_epoch()
+            eval_results = self._eval_epoch(end_of_epoch=True)
             self.logger.info("--- epoch %d ---" % epoch)
 
-            if self.best_measure_by_metric is not None:
-                if self.best_eval_result is None:
-                    self.best_eval_result = eval_results[self.best_measure_by_metric]
-                elif (
-                    self.metric_measurement == "highest"
-                    and self.best_eval_result
-                    > eval_results[self.best_measure_by_metric]
-                ):
-                    self.logger.info(
-                        f"not saving checkingpoint in {self.epochs}, as the {self.best_measure_by_metric} {eval_results[self.best_measure_by_metric]} is lower then {self.best_eval_result}"
-                    )
-                    save_checkpoint = False
-                elif self.best_eval_result < eval_results[self.best_measure_by_metric]:
-                    self.logger.info(
-                        f"not saving checkingpoint in {self.epochs}, as the {self.best_measure_by_metric} {eval_results[self.best_measure_by_metric]} is higher then {self.best_eval_result}"
-                    )
-                    save_checkpoint = False
+            # if self.best_measure_by_metric is not None:
+            #     if self.best_eval_result is None:
+            #         self.best_eval_result = eval_results[self.best_measure_by_metric]
+            #     elif (
+            #         self.metric_measurement == "highest"
+            #         and self.best_eval_result
+            #         > eval_results[self.best_measure_by_metric]
+            #     ):
+            #         self.logger.info(
+            #             f"not saving checkingpoint in {self.epochs}, as the {self.best_measure_by_metric} {eval_results[self.best_measure_by_metric]} is lower then {self.best_eval_result}"
+            #         )
+            #         save_checkpoint = False
+            #     elif self.best_eval_result < eval_results[self.best_measure_by_metric]:
+            #         self.logger.info(
+            #             f"not saving checkingpoint in {self.epochs}, as the {self.best_measure_by_metric} {eval_results[self.best_measure_by_metric]} is higher then {self.best_eval_result}"
+            #         )
+            #         save_checkpoint = False
 
-            if (epoch % self.args.get("save_freq", 1)) == 0 and save_checkpoint:
+            if (epoch % self.args.get("save_freq", 1)) == 0:
                 self.save_checkpoint(osp.join(self.log_dir, "epoch_%05d.pth" % epoch))

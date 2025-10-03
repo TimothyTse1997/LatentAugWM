@@ -52,7 +52,7 @@ def batch_filter(
     if durations is None:
         durations = get_max_duration(lens, ref_texts, gen_texts)
 
-    index_exceed_max_dur = [i for i, d in enumerate(durations) if i > max_duration]
+    index_exceed_max_dur = [i for i, d in enumerate(durations) if d > max_duration]
 
     list_exclude_from_indexs = lambda target, indexs: [
         t for i, t in enumerate(target) if i not in indexs
@@ -62,6 +62,9 @@ def batch_filter(
     ref_texts = list_exclude_from_indexs(ref_texts, index_exceed_max_dur)
     gen_texts = list_exclude_from_indexs(gen_texts, index_exceed_max_dur)
     durations = list_exclude_from_indexs(durations, index_exceed_max_dur)
+    if not durations:
+        return {}, []
+    assert max(durations) <= max_duration
 
     # print("current duration", durations)
     batch_size = len(durations)
@@ -110,7 +113,9 @@ def batch_filter(
     }, final_ids
 
 
-def recursive_batch_filtering(lens, cond, ref_texts, gen_texts, **kwargs):
+def recursive_batch_filtering(
+    lens, cond, ref_texts, gen_texts, max_duration=1500, **kwargs
+):
 
     current_batch_indexs = set(range(len(lens)))
     data = {
@@ -128,7 +133,11 @@ def recursive_batch_filtering(lens, cond, ref_texts, gen_texts, **kwargs):
             # print("current batch size", len(current_data['lens']))
             if len(current_data["lens"]) == 0:
                 break
-            filtered_batch, current_ids = batch_filter(**current_data, **kwargs)
+            filtered_batch, current_ids = batch_filter(
+                max_duration=max_duration, **current_data, **kwargs
+            )
+            if not current_ids:
+                continue
 
             all_batches.append(filtered_batch)
             current_batch_indexs -= current_ids

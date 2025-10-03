@@ -1,5 +1,5 @@
 name: single_latent_overfit_test
-version: debug_2
+version: debug_9
 
 #all_checkpoint_dir: /home/tst000/projects/checkpoint/latent_aug_wm
 all_checkpoint_dir: /home/tst000/projects/checkpoint/latent_aug_wm
@@ -11,15 +11,16 @@ tmp_dir: /home/tst000/projects/tmp/libriTTS
 latent_path: /home/tst000/projects/datasets/LibriTTS_synthesize/wm_noise.pt
 
 # training and dataset param
-lr: 1.0e-4
-train_batch_size: 32
-val_batch_size: 64
+lr: 1.0e-3
+train_batch_size: 16
+val_batch_size: 32
 epochs: 10
-unsorted_batch_size: 256
+unsorted_batch_size: 128
 allowed_padding: 50
 is_train: true
 steps_per_epoch: 10000
-eval_step_per_epoch: 3000
+eval_step_per_epoch: 100
+step_per_eval: 200
 
 best_measure_by_metric: "f1"
 metric_measurement: "highest" # or lowest
@@ -69,7 +70,7 @@ training_args: !new:addict.Dict
     - "detector"
   steps_per_epoch: !ref <steps_per_epoch>
   loss_weights:
-    mel_reg_l1_loss: 1.0
+    mel_reg_l1_loss: 0.0001
     detector_loss: 1.0
 
 
@@ -149,7 +150,7 @@ loss_fn: !apply:latent_aug_wm.loss.construct_loss_fn
   list_of_fn:
     - !name:latent_aug_wm.loss.base.generate_multiple_mel_from_f5tts
     - !name:latent_aug_wm.loss.base.mel_reg_L1_loss
-    - !ref <aug_applier>
+    #- !ref <aug_applier>
     - !name:latent_aug_wm.loss.base.detector_loss
 
 log_fn: !apply:latent_aug_wm.logging_utils.construct_logging_fn
@@ -182,6 +183,7 @@ trainer: !new:latent_aug_wm.trainer.base.Trainer
   log_dir: !ref <log_dir> #!ref <checkpoint_dir>/log/
   best_measure_by_metric: !ref <best_measure_by_metric>
   metric_measurement: !ref <metric_measurement>
+  step_per_eval: !ref <step_per_eval>
 
 train:
   trainer: !ref <trainer>

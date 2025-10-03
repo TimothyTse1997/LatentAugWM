@@ -173,6 +173,8 @@ if __name__ == "__main__":
 
     from latent_aug_wm.dataset.mel_dataset import get_combine_dataloader
 
+    sampler = F5TTSBatchInferencer(device="cuda")
+
     ref_wav_file = "/home/tst000/projects/datasets/selected_ref_files.txt"
     gen_txt_fname = "/home/tst000/projects/datasets/selected_gen_text.txt"
 
@@ -198,32 +200,34 @@ if __name__ == "__main__":
     )
 
     batch = next(data_iter)
-    sampler = F5TTSBatchInferencer(device="cuda")
 
     def save_text(text, fname):
         with open(fname, "w") as f:
             f.write(text)
 
-    generated_rebatched, generated = sampler.sample(
-        cond=batch["cond"].cuda(),
-        texts=batch["texts"],
-        duration=batch["duration"].cuda(),
-        lens=batch["lens"].cuda(),
-    )
-    for i, (gr, g) in enumerate(zip(generated_rebatched, generated)):
-        if i > 2:
-            break
-        print(gr.shape)
-        print(g.shape)
-        gr_wave = (
-            sampler.vocoder.decode(gr.unsqueeze(0).float()).squeeze().cpu().numpy()
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        generated_rebatched, generated = sampler.sample(
+            cond=batch["cond"].cuda(),
+            text=batch["text"],
+            duration=batch["duration"].cuda(),
+            lens=batch["lens"].cuda(),
         )
-        g_wave = sampler.vocoder.decode(g.unsqueeze(0).float()).squeeze().cpu().numpy()
+        for i, (gr, g) in enumerate(zip(generated_rebatched, generated)):
+            if i > 2:
+                break
+            print(gr.shape)
+            print(g.shape)
+            gr_wave = (
+                sampler.vocoder.decode(gr.unsqueeze(0).float()).squeeze().cpu().numpy()
+            )
+            g_wave = (
+                sampler.vocoder.decode(g.unsqueeze(0).float()).squeeze().cpu().numpy()
+            )
 
-        save_spectrogram(gr.detach().cpu(), f"{i}_gr_mel.png")
-        sampler.export_wav(gr_wave, f"{i}_gr.wav")
-        save_text(batch["gen_texts"][i], f"{i}_gr_text.txt")
+            # save_spectrogram(gr.detach().cpu(), f"{i}_gr_mel.png")
+            # sampler.export_wav(gr_wave, f"{i}_gr.wav")
+            # save_text(batch["gen_texts"][i], f"{i}_gr_text.txt")
 
-        save_spectrogram(g.detach().cpu(), f"{i}_g_mel.png")
-        sampler.export_wav(g_wave, f"{i}_g.wav")
-        save_text(batch["combine_texts"][i], f"{i}_g_text.txt")
+            # save_spectrogram(g.detach().cpu(), f"{i}_g_mel.png")
+            # sampler.export_wav(g_wave, f"{i}_g.wav")
+            # save_text(batch["combine_texts"][i], f"{i}_g_text.txt")
