@@ -8,6 +8,8 @@ pretrained_model: "" #!ref <all_checkpoint_dir>/<name>/version_5/epoch_00180.pth
 log_dir: !ref /home/tst000/projects/tensorboard_log/latent_aug_wm/<name>/version_<version>/
 tmp_dir: /home/tst000/projects/tmp/libriTTS
 
+override_json_fname: !ref <all_checkpoint_dir>/<name>/version_5/override_keys.json
+
 latent_path: /home/tst000/projects/datasets/LibriTTS_synthesize/wm_noise.pt
 
 # training and dataset param
@@ -37,6 +39,13 @@ n_mel_channels: 100
 hop_length: 256
 win_length: 1024
 n_fft: 1024
+
+inference_kwargs:
+  target_rms: 0.1
+  cross_fade_duration: 0.15
+  sway_sampling_coef: -1
+  cfg_strength: 2
+  nfe_step: 32
 
 # augmentation config
 transform_configs:
@@ -105,6 +114,7 @@ noise_encoder: !new:latent_aug_wm.model.encoder.UniqueNoiseEncoder
 f5tts: !new:latent_aug_wm.f5_infer.infer.F5TTSBatchInferencer
   device: !ref <device>
   train: !ref <is_train>
+  inference_kwargs: !ref <inference_kwargs>
 
 detector: !new:latent_aug_wm.model.decoder.BaseAudioSealClassifier
   input_dim: 1
