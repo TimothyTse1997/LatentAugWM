@@ -18,6 +18,13 @@ from f5_tts.api import F5TTS
 from f5_tts.infer.utils_infer import save_spectrogram, load_model
 
 
+def rebatching_from_varying_length(generated, lens, duration):
+    mels_removed_cond = []
+    for mel, length, dur in zip(generated, lens, duration):
+        mels_removed_cond.append(mel[length:dur, :])
+    return pad_sequence(mels_removed_cond, batch_first=True)
+
+
 class F5TTSBatchInferencer(F5TTS):
     def __init__(
         self,
@@ -55,12 +62,6 @@ class F5TTSBatchInferencer(F5TTS):
     def train(self):
         self.vocoder = self.vocoder.half()
 
-    def rebatching_from_varying_length(self, generated, lens, duration):
-        mels_removed_cond = []
-        for mel, length, dur in zip(generated, lens, duration):
-            mels_removed_cond.append(mel[length:dur, :])
-        return pad_sequence(mels_removed_cond, batch_first=True)
-
     def sample(self, cond, text, duration, lens, fix_noise=None):
 
         generated, _ = self.ema_model._sample(
@@ -74,9 +75,7 @@ class F5TTSBatchInferencer(F5TTS):
             fix_noise=fix_noise,
         )
         self.ema_model.transformer.clear_cache()
-        generated_rebatched = self.rebatching_from_varying_length(
-            generated, lens, duration
-        )
+        generated_rebatched = rebatching_from_varying_length(generated, lens, duration)
         return generated_rebatched.permute(0, 2, 1), generated.permute(0, 2, 1)
 
     def __call__(
@@ -109,9 +108,7 @@ class F5TTSBatchInferencer(F5TTS):
         )
         self.ema_model.transformer.clear_cache()
         assert self.ema_model.transformer.text_cond is None
-        generated_rebatched = self.rebatching_from_varying_length(
-            generated, lens, duration
-        )
+        generated_rebatched = rebatching_from_varying_length(generated, lens, duration)
         gr_wave = self.vocoder.decode(generated_rebatched.permute(0, 2, 1))
 
         result = {
