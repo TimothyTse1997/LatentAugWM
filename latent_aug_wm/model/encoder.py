@@ -135,8 +135,8 @@ class UniqueNoiseEncoderRemoveLen(nn.Module):
         # current_noise = current_noise[:, :seq_length, :]
         for batch_id, length in enumerate(lens):
             current_seq_length = seq_length - length
-            x[batch_id, length:] = current_noise[:current_seq_length]
-        return current_noise
+            x[batch_id, length:] = current_noise[0, :current_seq_length]
+        return x
 
     def get_non_wm_latent(self, x, lens):
         # created for contraining generation range
@@ -151,8 +151,8 @@ class UniqueNoiseEncoderRemoveLen(nn.Module):
         current_noise = current_noise[:, :seq_length, :]
         for batch_id, length in enumerate(lens):
             current_seq_length = seq_length - length
-            x[batch_id, length:] = current_noise[:current_seq_length]
-        return current_noise
+            x[batch_id, length:] = current_noise[0, :current_seq_length]
+        return x
 
 
 if __name__ == "__main__":
