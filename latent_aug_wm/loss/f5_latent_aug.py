@@ -29,19 +29,19 @@ class F5TTSForwardBackwardNoiseAug:
             forward_backward_step=self.forward_backward_step,
             **kwargs,
         )
-        # with torch.no_grad():
-        #     orig_inv_noise = sample_from_model(
-        #         fix_noise=random_noise,
-        #         model=nets.f5tts.ema_model,
-        #         inference_kwargs=self.inference_kwargs,
-        #         forward_backward_step=self.forward_backward_step,
-        #         **kwargs,
-        #     )
+        with torch.no_grad():
+            orig_inv_noise = sample_from_model(
+                fix_noise=random_noise,
+                model=nets.f5tts.ema_model,
+                inference_kwargs=self.inference_kwargs,
+                forward_backward_step=self.forward_backward_step,
+                **kwargs,
+            )
         return (
             {
                 "orig_noise": random_noise,
                 "aug_noise": aug_noise,
-                # "orig_inv_noise": orig_inv_noise
+                "orig_inv_noise": orig_inv_noise,
             },
             ["noise_encoder"],
         )
@@ -105,7 +105,8 @@ def generate_multiple_mel_from_f5tts_with_aug_noise(
 ):
     # ONLY works with model.encoder.UniqueNoiseEncoder
 
-    orig_noise = kwargs["orig_noise"]
+    orig_noise = kwargs["orig_inv_noise"]
+    # orig_noise = kwargs["orig_noise"]
     wm_noise = kwargs["aug_noise"]
 
     # with torch.no_grad():
@@ -149,6 +150,7 @@ if __name__ == "__main__":
     }
 
     loss_fn = F5TTSForwardBackwardNoiseAug(inference_kwargs)
+    gen_fn = generate_multiple_mel_from_f5tts_with_aug_noise
 
     ref_wav_file = "/home/tst000/projects/datasets/selected_ref_files.txt"
     gen_txt_fname = "/home/tst000/projects/datasets/selected_gen_text.txt"
@@ -185,6 +187,8 @@ if __name__ == "__main__":
 
     nets = addict.Dict({"f5tts": f5tts, "noise_encoder": noise_encoder})
     out = loss_fn(nets, step=0, **batch)
+    out = gen_fn(nets, step=0, **batch, **out[0])
+
     _, seq_len, num_channel = out[0]["orig_noise"].shape
     mask = len_to_mask(batch["lens"], seq_len)
     assert num_channel == 100
@@ -200,6 +204,18 @@ if __name__ == "__main__":
     )
     save_spectrogram(
         (output["aug_noise"] * mask.unsqueeze(-1)).permute(0, 2, 1).detach()[0],
+        f"aug_noise.png",
+    )
+    save_spectrogram(
+        (output["wm_generated_rebatched"] * mask.unsqueeze(-1))
+        .permute(0, 2, 1)
+        .detach()[0],
+        f"aug_noise.png",
+    )
+    save_spectrogram(
+        (output["rand_generated_rebatched"] * mask.unsqueeze(-1))
+        .permute(0, 2, 1)
+        .detach()[0],
         f"aug_noise.png",
     )
     print(noise_reg_L1_loss(**output, **batch))
