@@ -10,7 +10,7 @@ import torch.nn as nn
 # from torch.nn.utils.parametrizations import weight_norm
 from torch import linalg as LA
 
-# from latent_aug_wm.f5_infer.forward_backward import load_peft_f5tts_linear, sample_from_model
+from latent_aug_wm.loss.f5_latent_aug import len_to_mask
 
 
 class BasicEncoder(nn.Module):
@@ -109,7 +109,7 @@ class UniqueNoiseEncoderRemoveLen(nn.Module):
         self.common_latent = common_latent[:, : self.max_length].permute(1, 0)
         self.max_weight_norm = max_weight_norm
         self.special_latent = torch.nn.Parameter(
-            torch.zeros(self.max_length, self.num_channel),
+            torch.randn(self.max_length, self.num_channel) * 0.01,
             requires_grad=True,
         )
         assert self.common_latent.shape == self.special_latent.shape
@@ -117,6 +117,9 @@ class UniqueNoiseEncoderRemoveLen(nn.Module):
     def forward(self, x, lens):
         batch_size, seq_length, num_channel = x.shape
         common_latent = self.common_latent.to(x.device).type(x.dtype)
+
+        mask = len_to_mask(lens, seq_length)
+        inv_mask = (mask - 1) * -1
 
         assert num_channel == self.num_channel
         assert seq_length <= self.max_length
@@ -128,15 +131,20 @@ class UniqueNoiseEncoderRemoveLen(nn.Module):
         if weight_norm > self.max_weight_norm:
             special_latent = self.max_weight_norm * special_latent / weight_norm
 
-        current_noise = (
+        current_masked_noise = (
             special_latent + common_latent  # .unsqueeze(0).repeat(batch_size, 1, 1)
-        )
+        )[:seq_length].unsqueeze(0) * mask.unsqueeze(-1)
 
+        masked_input = inv_mask.unsqueeze(-1) * x
+
+        # output = x.clone()
+        output = masked_input + current_masked_noise
         # current_noise = current_noise[:, :seq_length, :]
-        for batch_id, length in enumerate(lens):
-            current_seq_length = seq_length - length
-            x[batch_id, length:] = current_noise[0, :current_seq_length]
-        return x
+        # for batch_id, length in enumerate(lens):
+        #     current_seq_length = seq_length - length
+        #     output[batch_id, length:] = current_noise[:current_seq_length]
+
+        return output
 
     def get_non_wm_latent(self, x, lens):
         # created for contraining generation range
@@ -146,18 +154,20 @@ class UniqueNoiseEncoderRemoveLen(nn.Module):
         assert num_channel == self.num_channel
         assert seq_length <= self.max_length
         # current_noise = torch.stack([torch.clone(self.special_latent) for _ in range(batch_size)])
-        current_noise = common_latent.unsqueeze(0)  # .repeat(batch_size, 1, 1)
+        current_noise = common_latent  # .repeat(batch_size, 1, 1)
 
-        current_noise = current_noise[:, :seq_length, :]
+        current_noise = current_noise[:seq_length, :]
+        output = x.clone()
+
         for batch_id, length in enumerate(lens):
             current_seq_length = seq_length - length
-            x[batch_id, length:] = current_noise[0, :current_seq_length]
+            output[batch_id, length:] = current_noise[:current_seq_length]
         return x
 
 
 if __name__ == "__main__":
     common_latent = torch.randn((2000, 100))
-    noise_update_fn = UniqueNoiseEncoder(common_latent).half().cuda()
+    noise_update_fn = UniqueNoiseEncoderRemoveLen(common_latent).half().cuda()
 
     from latent_aug_wm.dataset.mel_dataset import get_combine_dataloader
 
@@ -198,6 +208,7 @@ if __name__ == "__main__":
         texts=batch["texts"],
         durations=batch["durations"].cuda(),
         lens=batch["lens"].cuda(),
+        use_grad_checkpoint=True,
     )
     for k, v in generated_dict.items():
         print(k, v.shape)

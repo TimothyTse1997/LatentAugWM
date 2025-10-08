@@ -9,6 +9,7 @@ import yaml
 import shutil
 import click
 import warnings
+import traceback
 
 
 import time
@@ -234,6 +235,18 @@ class Trainer(object):
         # for param, param_test in zip(model.parameters(), model_test.parameters()):
         #     param_test.data = torch.lerp(param.data, param_test.data, beta)
 
+    def get_grad_norm(self, model_name):
+        grads = [
+            param.grad.detach().flatten()
+            for param in self.model[model_name].parameters()
+            if param.grad is not None
+        ]
+        try:
+            norm = torch.cat(grads).norm()
+        except:
+            norm = 0
+        return norm
+
     def batch_detach(self, batch):
         if isinstance(batch, list) or isinstance(batch, tuple):
             batch = [v.detach() if torch.is_tensor(v) else v for v in batch]
@@ -270,15 +283,15 @@ class Trainer(object):
                 self.model, self.args.loss_weights, batch, eval=False
             )
         loss.backward()
-
         # for n, p in self.model.noise_encoder.named_parameters():
         #     if p.requires_grad:
         #         print(n, p.grad.abs().mean())
-        del loss
 
         for m in used_modules:
             # self.optimizer.step(m, scaler=scaler)
             self.optimizer.step(m)
+            model_norm = self.get_grad_norm(m)
+            self.writer.add_scalar("train/%s_grad_norm" % m, model_norm, self.steps)
 
         batch = self.batch_detach(batch)
         if (
@@ -309,7 +322,14 @@ class Trainer(object):
         ):
 
             gc.collect()
-            loss_items = self._train_step(batch)  # , scaler)
+            try:
+                loss_items = self._train_step(batch)  # , scaler)
+            except Exception as e:
+                traceback.print_exc()
+                batch = None
+                gc.collect()
+                torch.cuda.empty_cache()
+                continue
 
             for key in loss_items:
                 train_losses["train/%s" % key].append(loss_items[key])

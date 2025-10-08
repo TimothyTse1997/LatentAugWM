@@ -51,6 +51,7 @@ class F5TTSBatchInferencer(F5TTS):
 
         for param in self.vocoder.parameters():
             param.requires_grad = False
+
         if train:
             self.vocoder = self.vocoder.half()
 
@@ -109,7 +110,7 @@ class F5TTSBatchInferencer(F5TTS):
         self.ema_model.transformer.clear_cache()
         assert self.ema_model.transformer.text_cond is None
         generated_rebatched = rebatching_from_varying_length(generated, lens, duration)
-        gr_wave = self.vocoder.decode(generated_rebatched.permute(0, 2, 1))
+        gr_wave = self.vocoder.decode_with_grad(generated_rebatched.permute(0, 2, 1))
 
         result = {
             "generated_rebatched_mel": generated_rebatched,
@@ -118,7 +119,7 @@ class F5TTSBatchInferencer(F5TTS):
         if not eval:
             return result
         with torch.no_grad():
-            result["g_wave"] = self.vocoder.decode(generated.permute(0, 2, 1))
+            result["g_wave"] = self.vocoder.decode_with_grad(generated.permute(0, 2, 1))
         return result
 
 

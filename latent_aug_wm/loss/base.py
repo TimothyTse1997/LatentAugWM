@@ -25,9 +25,7 @@ def generate_multiple_mel_from_f5tts(nets=None, step=None, eval=False, **kwargs)
     orig_noise = nets.noise_encoder.get_non_wm_latent(random_noise)
 
     # with torch.no_grad():
-    wm_out = nets.f5tts(
-        fix_noise=wm_noise, use_grad_checkpoint=(not eval), eval=eval, **kwargs
-    )
+
     with torch.no_grad():
         orig_out = nets.f5tts(
             fix_noise=orig_noise, use_grad_checkpoint=False, eval=eval, **kwargs
@@ -35,6 +33,9 @@ def generate_multiple_mel_from_f5tts(nets=None, step=None, eval=False, **kwargs)
         out = nets.f5tts(
             fix_noise=random_noise, use_grad_checkpoint=False, eval=eval, **kwargs
         )
+    wm_out = nets.f5tts(
+        fix_noise=wm_noise, use_grad_checkpoint=(not eval), eval=eval, **kwargs
+    )
     # out:
     # {
     #     "generated_rebatched": generated_rebatched,
@@ -62,7 +63,7 @@ def mel_reg_L1_loss(nets=None, step=None, scale=None, **kwargs):
     return {"mel_reg_l1_loss": mel_reg_loss}, []
 
 
-def detector_loss(nets=None, step=None, scale=None, **kwargs):
+def detector_loss(nets=None, step=None, scale=1.0, **kwargs):
     real_input, fake_input = kwargs["rand_gr_wave"], kwargs["wm_gr_wave"]
     batch_size, seq_len = real_input.shape
 
@@ -75,9 +76,10 @@ def detector_loss(nets=None, step=None, scale=None, **kwargs):
     fake_detector_logits, fake_loss = nets.detector.calculate_loss(
         fake_input.unsqueeze(1), fake_logits
     )
+    print(scale)
 
     return {
-        "detector_loss": real_loss + fake_loss,
+        "detector_loss": (real_loss + fake_loss) * scale,
         "real_detector_logits": real_detector_logits.detach().cpu(),
         "fake_detector_logits": fake_detector_logits.detach().cpu(),
     }, ["detector"]
@@ -104,7 +106,8 @@ if __name__ == "__main__":
     from latent_aug_wm.model.decoder import BaseAudioSealClassifier
     from latent_aug_wm.f5_infer.infer import F5TTSBatchInferencer
 
-    common_latent = torch.randn((2000, 100))
+    # common_latent = torch.randn((2000, 100))
+    common_latent = torch.randn((100, 2000))
 
     nets = AttrMap(
         {
@@ -170,8 +173,8 @@ if __name__ == "__main__":
     loss_fn = construct_loss_fn(
         [
             generate_multiple_mel_from_f5tts,
-            mel_reg_L1_loss,
-            AugApplier(aug_obj),
+            # mel_reg_L1_loss,
+            # AugApplier(aug_obj),
             detector_loss,
         ],
         log_fn_time=False,
@@ -181,12 +184,12 @@ if __name__ == "__main__":
     nets.f5tts.ema_model = nets.f5tts.ema_model.half()
 
     with torch.cuda.amp.autocast():
-        _ = loss_fn(nets, {}, batch, 0, eval=False)
-        del _
-        total_loss, loss_items, _, items = loss_fn(nets, {}, batch, 0, eval=True)
+        total_loss, loss_items, _ = loss_fn(nets, {}, batch, 0, eval=False)
+        # del _
+        # total_loss, loss_items, _, items = loss_fn(nets, {}, batch, 0, eval=True)
 
     total_loss.backward()
-    print(items.keys())
+    # print(items.keys())
     print("loss", loss_items)
     for n, p in nets.noise_encoder.named_parameters():
         if p.requires_grad:

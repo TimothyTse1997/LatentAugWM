@@ -52,7 +52,7 @@ def loss_fn_add_per_step_scaling(
     def modified_loss(nets=None, step=None, **kwargs):
 
         if step is None or step < start_step:
-            return kwargs
+            return kwargs, []
         if step >= final_step:
             current_scale = 1.0
         else:

@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from latent_aug_wm.f5_infer.forward_backward import sample_from_model
 
 l1_loss = nn.L1Loss()
+l2_loss = nn.MSELoss()
 
 
 class F5TTSForwardBackwardNoiseAug:
@@ -28,7 +29,22 @@ class F5TTSForwardBackwardNoiseAug:
             forward_backward_step=self.forward_backward_step,
             **kwargs,
         )
-        return {"orig_noise": random_noise, "aug_noise": aug_noise}, ["noise_encoder"]
+        # with torch.no_grad():
+        #     orig_inv_noise = sample_from_model(
+        #         fix_noise=random_noise,
+        #         model=nets.f5tts.ema_model,
+        #         inference_kwargs=self.inference_kwargs,
+        #         forward_backward_step=self.forward_backward_step,
+        #         **kwargs,
+        #     )
+        return (
+            {
+                "orig_noise": random_noise,
+                "aug_noise": aug_noise,
+                # "orig_inv_noise": orig_inv_noise
+            },
+            ["noise_encoder"],
+        )
 
 
 def len_to_mask(lens, max_dur):
@@ -41,19 +57,44 @@ def len_to_mask(lens, max_dur):
 
 
 def noise_reg_L1_loss(nets=None, step=None, scale=None, **kwargs):
+    # orig_noise = kwargs["orig_inv_noise"]
     orig_noise = kwargs["orig_noise"]
     aug_noise = kwargs["aug_noise"]
 
-    _, seq_len, num_channel = orig_noise.shape
-    assert num_channel == 100
+    # _, seq_len, num_channel = orig_noise.shape
+    # assert num_channel == 100
 
-    lens = kwargs["lens"]
-    mask = len_to_mask(lens, seq_len)
-    noise_reg_loss = torch.abs(
-        (orig_noise - aug_noise) * mask.unsqueeze(-1)
-    ).sum() / torch.sum(mask)
+    # lens = kwargs["lens"]
+    # mask = len_to_mask(lens, seq_len)
+    # noise_reg_loss = torch.abs(
+    #     (orig_noise - aug_noise) * mask.unsqueeze(-1)
+    # ).sum() / torch.sum(mask)
 
     # noise_reg_loss = l1_loss(aug_noise, orig_noise)
+
+    noise_reg_loss = l1_loss(aug_noise, orig_noise)
+    if scale is not None:
+        noise_reg_loss = noise_reg_loss * scale
+    return {"noise_reg_loss": noise_reg_loss}, []
+
+
+def noise_reg_L2_loss(nets=None, step=None, scale=None, **kwargs):
+    # orig_noise = kwargs["orig_inv_noise"]
+    orig_noise = kwargs["orig_noise"]
+    aug_noise = kwargs["aug_noise"]
+
+    # _, seq_len, num_channel = orig_noise.shape
+    # assert num_channel == 100
+
+    # lens = kwargs["lens"]
+    # mask = len_to_mask(lens, seq_len)
+    # noise_reg_loss = torch.abs(
+    #     (orig_noise - aug_noise) * mask.unsqueeze(-1)
+    # ).sum() / torch.sum(mask)
+
+    # noise_reg_loss = l1_loss(aug_noise, orig_noise)
+
+    noise_reg_loss = l2_loss(aug_noise, orig_noise)
     if scale is not None:
         noise_reg_loss = noise_reg_loss * scale
     return {"noise_reg_loss": noise_reg_loss}, []
@@ -84,10 +125,10 @@ def generate_multiple_mel_from_f5tts_with_aug_noise(
     wm_out = {("wm_" + k): v for k, v in wm_out.items()}
     orig_out = {("rand_" + k): v for k, v in orig_out.items()}
 
-    wm_out.update(out)
+    # wm_out.update(out)
     wm_out.update(orig_out)
 
-    return wm_out, ["noise_encoder"]
+    return wm_out, []
 
 
 if __name__ == "__main__":
