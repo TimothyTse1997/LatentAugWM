@@ -25,7 +25,9 @@ class BaseBatchAugmentation:
     *** cannot implement highpass-lowpass filter in fp16
     """
 
-    def __init__(self, sampling_rate=24000, transform_configs: dict = {}):
+    def __init__(
+        self, sampling_rate=24000, transform_configs: dict = {}, add_no_aug=True
+    ):
         # transforms = [
         #     name: getattr(torch_audiomentations, name)(**tc) \
         #         for name, tc in transform_configs.items()
@@ -40,7 +42,9 @@ class BaseBatchAugmentation:
             for name, tc in transform_configs.items()
         ]
         # add no augmentation as option
-        self.transforms.append(("no_aug", (lambda x, s: x)))
+        self.add_no_aug = add_no_aug
+        if self.add_no_aug:
+            self.transforms.append(("no_aug", (lambda x, s: x)))
 
     def __call__(self, input):
         name, transform = random.choice(self.transforms)

@@ -1,17 +1,18 @@
 name: forward_backward
-version: debug_9_add_reg_remove_peft_from_ema_l2_reg_scale_detector
+version: debug_25_add_reg_remove_peft_from_ema_l1_reg_scale_detector_no_checkpoint_with_aug_reduce_reg_and_lr_always_aug_change_scheduler_with_grad_clip_no_ema
 
+system_root: /home/tst000/projects/tst000
 #all_checkpoint_dir: /home/tst000/projects/checkpoint/latent_aug_wm
-all_checkpoint_dir: /home/tst000/projects/checkpoint/latent_aug_wm
+all_checkpoint_dir: !ref <system_root>/checkpoint/latent_aug_wm
 checkpoint_dir: !ref <all_checkpoint_dir>/<name>/version_<version>/
 pretrained_model: "" #!ref <all_checkpoint_dir>/<name>/version_5/epoch_00180.pth
-log_dir: !ref /home/tst000/projects/tensorboard_log/latent_aug_wm/<name>/version_<version>/
-tmp_dir: /home/tst000/projects/tmp/libriTTS
+log_dir: !ref <system_root>/tensorboard_log/latent_aug_wm/<name>/version_<version>/
+tmp_dir: !ref <system_root>/tmp/libriTTS
 
 #override_json_fname: !ref <all_checkpoint_dir>/<name>/version_5/override_keys.json
 
 # training and dataset param
-lr: 1.0e-3
+lr: 5.0e-3
 train_batch_size: 16
 val_batch_size: 32
 epochs: 10
@@ -19,8 +20,8 @@ unsorted_batch_size: 128
 allowed_padding: 50
 is_train: true
 steps_per_epoch: 10000
-eval_step_per_epoch: 100
-step_per_eval: 50
+eval_step_per_epoch: 64
+step_per_eval: 500
 
 best_measure_by_metric: "f1"
 metric_measurement: "highest" # or lowest
@@ -62,23 +63,23 @@ mel_spec_kwargs:
   n_fft: !ref <n_fft>
   mel_spec_type: "vocos"
 
-train_ref_wav_file: "/home/tst000/projects/datasets/selected_ref_files_train.txt"
-val_ref_wav_file: "/home/tst000/projects/datasets/selected_ref_files_eval.txt"
+train_ref_wav_file: !ref <system_root>/datasets/selected_ref_files_train.txt
+val_ref_wav_file: !ref <system_root>/datasets/selected_ref_files_eval.txt
 
-train_gen_txt_fname: "/home/tst000/projects/datasets/selected_gen_text_train.txt"
-val_gen_txt_fname: "/home/tst000/projects/datasets/selected_gen_text_eval.txt"
+train_gen_txt_fname: !ref <system_root>/datasets/selected_gen_text_train.txt
+val_gen_txt_fname: !ref <system_root>/datasets/selected_gen_text_eval.txt
 
 training_args: !new:addict.Dict
-  ema_modules:
-    - "detector"
+  ema_modules: null
+  # - "detector"
   save_modules:
     - "noise_encoder"
     - "detector"
   steps_per_epoch: !ref <steps_per_epoch>
   loss_weights:
     #mel_reg_l1_loss: 0.0001
-    detector_loss: 0.1
-    noise_reg_loss: 100.0
+    detector_loss: 1.0
+    noise_reg_loss: 1.0
 
 peft_module_names:
   - "noise_encoder"
@@ -112,7 +113,7 @@ f5tts: !new:latent_aug_wm.f5_infer.infer.F5TTSBatchInferencer
   inference_kwargs: !ref <inference_kwargs>
 
 noise_encoder: !apply:latent_aug_wm.f5_infer.forward_backward.load_peft_f5tts_linear
-  - !ref <f5tts>
+  - !copy <f5tts>
 
 detector: !new:latent_aug_wm.model.decoder.BaseAudioSealClassifier
   input_dim: 1
@@ -122,54 +123,64 @@ model: !new:addict.Dict
   f5tts: !ref <f5tts>
   detector: !ref <detector>
 
-model_ema: !new:addict.Dict
-  detector: !copy <detector>
+#model_ema: !new:addict.Dict
+#  detector: !copy <detector>
 
 model_device: !apply:latent_aug_wm.trainer.base.Trainer.load_attr_model_to_device
   - !ref <model>
   - !ref <device>
 
-model_ema_device: !apply:latent_aug_wm.trainer.base.Trainer.load_attr_model_to_device
-  - !ref <model_ema>
-  - !ref <device>
+#model_ema_device: !apply:latent_aug_wm.trainer.base.Trainer.load_attr_model_to_device
+#  - !ref <model_ema>
+#  - !ref <device>
 
 # lr schduler param
 schduler_params:
-  max_lr: !ref <lr>
-  pct_start: 0.0
-  epochs: !ref <epochs>
-  steps_per_epoch: !ref <steps_per_epoch>
+  start_factor: 1.0
+  end_factor: 1.0
+  total_iters: 1.0
+  # max_lr: !ref <lr>
+  # pct_start: 0.0
+  # epochs: !ref <epochs>
+  # steps_per_epoch: !ref <steps_per_epoch>
 
+model_lr:
+  noise_encoder: !ref <lr>
+  detector: !ref <lr>
 
 optimizer: !apply:latent_aug_wm.trainer.optimizer.build_optimizer
   model_dict: !ref <model>
   scheduler_params_dict:
     noise_encoder: !copy <schduler_params>
     detector: !copy <schduler_params>
+  model_lr: !ref <model_lr>
+  
 
 aug_applier: !new:latent_aug_wm.loss.base.AugApplier
   aug_obj: !new:latent_aug_wm.data_augmentation.base.BaseBatchAugmentation
     sampling_rate: !ref <sample_rate>
     transform_configs: !ref <transform_configs>
+    add_no_aug: false
 
 forward_backward_f5_loss_fn: !new:latent_aug_wm.loss.f5_latent_aug.F5TTSForwardBackwardNoiseAug
   inference_kwargs: !ref <inference_kwargs>
+  aug_weighted: 0.1
 
 scaled_detector_loss: !apply:latent_aug_wm.loss.loss_fn_add_per_step_scaling
   loss_fn: !name:latent_aug_wm.loss.base.detector_loss
-  initial_scale: 0.0
-  start_step: 50
-  final_step: 1000
+  initial_scale: 0.5
+  start_step: 100
+  final_step: 200
 
 loss_fn: !apply:latent_aug_wm.loss.construct_loss_fn
   list_of_fn:
     #- !name:latent_aug_wm.loss.base.generate_multiple_mel_from_f5tts
     - !ref <forward_backward_f5_loss_fn>
     #- !name:latent_aug_wm.loss.f5_latent_aug.noise_reg_L1_loss
-    - !name:latent_aug_wm.loss.f5_latent_aug.noise_reg_L2_loss
+    - !name:latent_aug_wm.loss.f5_latent_aug.noise_reg_L1_loss
     - !name:latent_aug_wm.loss.f5_latent_aug.generate_multiple_mel_from_f5tts_with_aug_noise
     #- !name:latent_aug_wm.loss.base.mel_reg_L1_loss
-    #- !ref <aug_applier>
+    - !ref <aug_applier>
     #- !name:latent_aug_wm.loss.base.detector_loss
     - !ref <scaled_detector_loss>
 
@@ -188,7 +199,8 @@ metrics: !apply:latent_aug_wm.logging_utils.construct_full_epoch_metrics
 trainer: !new:latent_aug_wm.trainer.peft_trainer.PeftTrainer
   args: !ref <training_args>
   model: !ref <model>
-  model_ema: !ref <model_ema>
+  #model_ema: !ref <model_ema>
+  model_ema: null #!ref <model_ema>
   optimizer: !ref <optimizer>
   device: !ref <device>
   train_dataloader: !ref <train_dataloader>

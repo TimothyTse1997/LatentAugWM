@@ -1,15 +1,15 @@
 name: single_latent_overfit_test_weight_norm_length_adjusted
-version: debug_9_overfit_test_remove_mel_loss_new_vocos_code
+version: debug_2
 
-all_checkpoint_dir: /home/tst000/projects/checkpoint/latent_aug_wm
+all_checkpoint_dir: /home/tst000/projects/tst000/checkpoints
 checkpoint_dir: !ref <all_checkpoint_dir>/<name>/version_<version>/
 pretrained_model: "" #!ref <all_checkpoint_dir>/<name>/version_5/epoch_00180.pth
-log_dir: !ref /home/tst000/projects/tensorboard_log/latent_aug_wm/<name>/version_<version>/
-tmp_dir: /home/tst000/projects/tmp/libriTTS
+log_dir: !ref /home/tst000/projects/tst000/tensorboard_log/latent_aug_wm/<name>/version_<version>/
+tmp_dir: /home/tst000/projects/tst000/tmp/libriTTS
 
 #override_json_fname: !ref <all_checkpoint_dir>/<name>/version_5/override_keys.json
 
-latent_path: /home/tst000/projects/datasets/LibriTTS_synthesize/wm_noise.pt
+latent_path: /home/tst000/projects/tst000/LibriTTS/common_latent.pt
 
 # training and dataset param
 lr: 5.0e-3
@@ -58,11 +58,11 @@ mel_spec_kwargs:
   n_fft: !ref <n_fft>
   mel_spec_type: "vocos"
 
-train_ref_wav_file: "/home/tst000/projects/datasets/selected_ref_files_train.txt"
-val_ref_wav_file: "/home/tst000/projects/datasets/selected_ref_files_eval.txt"
+train_ref_wav_file: "/home/tst000/projects/tst000/datasets/selected_ref_files_train.txt"
+val_ref_wav_file: "/home/tst000/projects/tst000/datasets/selected_ref_files_eval.txt"
 
-train_gen_txt_fname: "/home/tst000/projects/datasets/selected_gen_text_train.txt"
-val_gen_txt_fname: "/home/tst000/projects/datasets/selected_gen_text_eval.txt"
+train_gen_txt_fname: "/home/tst000/projects/tst000/datasets/selected_gen_text_train.txt"
+val_gen_txt_fname: "/home/tst000/projects/tst000/datasets/selected_gen_text_eval.txt"
 
 training_args: !new:addict.Dict
   ema_modules: "detector"
@@ -72,6 +72,7 @@ training_args: !new:addict.Dict
     detector_loss: 1.0
 
 
+train_dataloader: !apply:latent_aug_wm.dataset.mel_dataset.get_combine_dataloader
 train_dataloader: !apply:latent_aug_wm.dataset.mel_dataset.get_combine_dataloader
   ref_wav_file: !ref <train_ref_wav_file>
   gen_txt_fname: !ref <train_gen_txt_fname>
@@ -183,7 +184,6 @@ trainer: !new:latent_aug_wm.trainer.base.Trainer
   log_dir: !ref <log_dir>
   best_measure_by_metric: !ref <best_measure_by_metric>
   metric_measurement: !ref <metric_measurement>
-  step_per_eval: !ref <step_per_eval>
 
 train:
   trainer: !ref <trainer>

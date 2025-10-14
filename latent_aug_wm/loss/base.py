@@ -76,7 +76,6 @@ def detector_loss(nets=None, step=None, scale=1.0, **kwargs):
     fake_detector_logits, fake_loss = nets.detector.calculate_loss(
         fake_input.unsqueeze(1), fake_logits
     )
-    print(scale)
 
     return {
         "detector_loss": (real_loss + fake_loss) * scale,

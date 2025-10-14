@@ -55,27 +55,33 @@ class MultiOptimizer:
 
 def define_scheduler(optimizer, params):
     print(params)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    # scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    #     optimizer,
+    #     max_lr=params.get("max_lr", 2e-4),
+    #     epochs=params.get("epochs", 200),
+    #     steps_per_epoch=params.get("steps_per_epoch", 1000),
+    #     pct_start=params.get("pct_start", 0.0),
+    #     div_factor=1,
+    #     final_div_factor=1,
+    # )
+    scheduler = torch.optim.lr_scheduler.LinearLR(
         optimizer,
-        max_lr=params.get("max_lr", 2e-4),
-        epochs=params.get("epochs", 200),
-        steps_per_epoch=params.get("steps_per_epoch", 1000),
-        pct_start=params.get("pct_start", 0.0),
-        div_factor=1,
-        final_div_factor=1,
+        start_factor=params.get("start_factor", 0.3),
+        end_factor=params.get("end_factor", 1.0),
+        total_iters=params.get("total_iters", 10),
     )
 
     return scheduler
 
 
-def build_optimizer(model_dict, scheduler_params_dict):
+def build_optimizer(model_dict, scheduler_params_dict, model_lr={}):
     optim = dict(
         [
             (
                 key,
                 AdamW(
                     model_dict[key].parameters(),
-                    lr=1e-4,
+                    lr=model_lr.get(key, 1e-4),
                     weight_decay=1e-4,
                     betas=(0.0, 0.99),
                     eps=1e-9,

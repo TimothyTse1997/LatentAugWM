@@ -62,7 +62,7 @@ class PeftTrainer(Trainer):
         }
         if self.model_ema is not None:
             ema_model_state_dicts = {
-                key: self.model_ema[key].state_dict() for key in self.args.save_modules
+                key: self.model_ema[key].state_dict for key in self.args.save_modules
             }
             state_dict["model_ema"] = ema_model_state_dicts
 
@@ -127,3 +127,12 @@ class PeftTrainer(Trainer):
     def _load_peft(self, states, peft_model, force_load=True):
         out = set_peft_model_state_dict(peft_model, states)
         print(out.unexpected_keys)
+
+    @staticmethod
+    def moving_average(model, model_test, beta=0.999):
+        for param_name, param in model.parameters.items():
+            if "lora" in param_name:
+                print(f"skip lora param: {param_name}")
+                continue
+            param_test = model_test.parameters[param_name]
+            param_test.data = torch.lerp(param.data, param_test.data, beta)

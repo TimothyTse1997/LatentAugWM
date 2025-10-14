@@ -42,15 +42,12 @@ class F5TTSBatchInferencer(F5TTS):
     ):
         super().__init__(*args, **kwargs)
         self.inference_kwargs = inference_kwargs
-        for param in self.ema_model.parameters():
-            param.requires_grad = False
 
         # for example, we can use griffinlim here
         if custum_vocoder is not None:
             self.vocoder = custum_vocoder
 
-        for param in self.vocoder.parameters():
-            param.requires_grad = False
+        self.set_require_grad()
 
         if train:
             self.vocoder = self.vocoder.half()
@@ -59,6 +56,13 @@ class F5TTSBatchInferencer(F5TTS):
 
     def update_wm_function(self, use_wm=True):
         self.ema_model.use_wm = use_wm
+
+    def set_require_grad(self):
+        for param in self.vocoder.parameters():
+            param.requires_grad = False
+
+        for param in self.ema_model.parameters():
+            param.requires_grad = False
 
     def train(self):
         self.vocoder = self.vocoder.half()
@@ -130,6 +134,7 @@ def load_cfm(
     ode_method="euler",
     vocab_file="",
     hf_cache_dir=None,
+    ckpt_file=None,
 ):
     model_cfg = OmegaConf.load(str(files("f5_tts").joinpath(f"configs/{model}.yaml")))
     model_cls = get_class(f"f5_tts.model.{model_cfg.model.backbone}")
@@ -137,6 +142,8 @@ def load_cfm(
     # override for previous models
     mel_spec_type = model_cfg.model.mel_spec.mel_spec_type
     target_sample_rate = model_cfg.model.mel_spec.target_sample_rate
+
+    repo_name, ckpt_step, ckpt_type = "F5-TTS", 1250000, "safetensors"
     if model == "F5TTS_Base":
         if mel_spec_type == "vocos":
             ckpt_step = 1200000

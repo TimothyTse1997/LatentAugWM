@@ -55,6 +55,13 @@ def run_cfm_fb_noise(
     return generated.permute(0, 2, 1)
 
 
+def _get_peft_f5tts_names(fttts_inferencer: F5TTSBatchInferencer):
+    module = fttts_inferencer.ema_model
+
+    for n, m in module.named_modules():
+        print(n, type(m))
+
+
 def load_peft_f5tts_linear(fttts_inferencer: F5TTSBatchInferencer):
     module = fttts_inferencer.ema_model
     linear_layer_names = [
@@ -62,6 +69,25 @@ def load_peft_f5tts_linear(fttts_inferencer: F5TTSBatchInferencer):
         for n, m in module.named_modules()
         if isinstance(m, nn.modules.linear.Linear)
         and ("ff.ff" in n)
+        and ("transformer_blocks" in n)
+    ]
+    config = LoraConfig(
+        target_modules=linear_layer_names,
+        modules_to_save=[],
+    )
+    peft_model = get_peft_model(module, config)
+    print("created trainable parameters")
+    peft_model.print_trainable_parameters()
+    return peft_model
+
+
+def load_peft_f5tts_q_k(fttts_inferencer: F5TTSBatchInferencer):
+    module = fttts_inferencer.ema_model
+    linear_layer_names = [
+        n
+        for n, m in module.named_modules()
+        if isinstance(m, nn.modules.linear.Linear)
+        and ("attn.to_q" in n or "attn.to_k" in n)
         and ("transformer_blocks" in n)
     ]
     config = LoraConfig(
@@ -106,3 +132,9 @@ def sample_from_model(
     assert model.transformer.text_cond is None
 
     return generated
+
+
+if __name__ == "__main__":
+
+    sampler = F5TTSBatchInferencer(device="cuda")
+    _get_peft_f5tts_names(sampler)

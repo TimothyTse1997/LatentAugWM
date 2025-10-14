@@ -114,7 +114,7 @@ def batch_filter(
 
 
 def recursive_batch_filtering(
-    lens, cond, ref_texts, gen_texts, max_duration=1500, **kwargs
+    lens, cond, ref_texts, gen_texts, max_duration=1500, max_filter_loop=100, **kwargs
 ):
 
     current_batch_indexs = set(range(len(lens)))
@@ -127,8 +127,13 @@ def recursive_batch_filtering(
     current_data = data
     all_batches = []
     current_durations = kwargs.get("durations", None)
+
+    current_step = 0
     while True:
         # try:
+        current_step += 1
+        if current_step > max_filter_loop:
+            break
         if True:
             # print("current batch size", len(current_data['lens']))
             if len(current_data["lens"]) == 0:

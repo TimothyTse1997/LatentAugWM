@@ -33,10 +33,10 @@ class BinaryF1Metric(BaseMetric):
 
     def step_process(self, batch):
 
-        real_detector_logits = batch.get("real_detector_logits", [])
-        fake_detector_logits = batch.get("fake_detector_logits", [])
+        real_detector_logits = batch.get("real_detector_logits", None)
+        fake_detector_logits = batch.get("fake_detector_logits", None)
 
-        if real_detector_logits:
+        if real_detector_logits is not None:
             self.start_update = True
             real_detector_pred = (
                 torch.argmax(real_detector_logits, dim=-1).detach().cpu()
