@@ -1,0 +1,254 @@
+name: curriculum_detector_stage
+#version: debug_28_audioseal_detector_no_reg_update_scheduler_use_full_transformer_lora
+version: stage_1_debug_2
+
+system_root: /home/tst000/projects/tst000
+#all_checkpoint_dir: /home/tst000/projects/checkpoint/latent_aug_wm
+all_checkpoint_dir: !ref <system_root>/checkpoint/latent_aug_wm
+checkpoint_dir: !ref <all_checkpoint_dir>/<name>/version_<version>/
+pretrained_model:
+  - /home/tst000/projects/tst000/checkpoint/latent_aug_wm/detector_pretrain/version_debug_7/epoch_0_step_1000_best_f1_0.9911624789237976.pth
+  - /gpfs/fs3c/nrc/dt/tst000/checkpoint/latent_aug_wm/curriculum_generator_stage/version_stage_1_debug_16_real_only_no_reg_no_aug/epoch_0_step_5000_best_f1_0.0.pth
+log_dir: !ref <system_root>/tensorboard_log/latent_aug_wm/<name>/version_<version>/
+tmp_dir: !ref <system_root>/tmp/libriTTS
+
+#override_json_fname: !ref <all_checkpoint_dir>/<name>/version_5/override_keys.json
+
+# training and dataset param
+lr: 1.0e-4
+noise_encoder_lr: 1.0e-4
+train_batch_size: 4
+val_batch_size: 64
+epochs: 10
+unsorted_batch_size: 128
+allowed_padding: 50
+is_train: true
+steps_per_epoch: 10000
+eval_step_per_epoch: 64
+step_per_eval: 500
+
+best_measure_by_metric: "f1"
+metric_measurement: "highest" # or lowest
+
+fp16: true
+num_workers: 10
+device: cuda
+save_freq: 50
+log_audio_batchs: 10
+
+# mel param
+sample_rate: 24000
+n_mel_channels: 100
+hop_length: 256
+win_length: 1024
+n_fft: 1024
+
+inference_kwargs:
+  target_rms: 0.1
+  cross_fade_duration: 0.15
+  sway_sampling_coef: -1
+  cfg_strength: 2
+  nfe_step: 32
+
+# augmentation config
+transform_configs:
+  AddColoredNoise:
+    mode: "per_example"
+    p: 1.0
+    min_snr_in_db: 10.0
+    max_snr_in_db: 10.0
+
+# F5TTS params
+mel_spec_kwargs:
+  target_sample_rate: !ref <sample_rate>
+  n_mel_channels: !ref <n_mel_channels>
+  hop_length: !ref <hop_length>
+  win_length: !ref <win_length>
+  n_fft: !ref <n_fft>
+  mel_spec_type: "vocos"
+
+train_ref_wav_file: !ref <system_root>/datasets/selected_ref_files_train.txt
+val_ref_wav_file: !ref <system_root>/datasets/selected_ref_files_eval.txt
+
+train_gen_txt_fname: !ref <system_root>/datasets/selected_gen_text_train.txt
+val_gen_txt_fname: !ref <system_root>/datasets/selected_gen_text_eval.txt
+
+training_args: !new:addict.Dict
+  ema_modules: null
+  # - "detector"
+  save_modules:
+    - "detector"
+    - "classifier"
+  steps_per_epoch: !ref <steps_per_epoch>
+  loss_weights:
+    #mel_reg_l1_loss: 0.0001
+    detector_loss: 1.0
+    noise_reg_loss: 25.0
+  max_norm: 12.0
+  max_norm_dict:
+    noise_encoder: 12.0
+  pretrained_model: !ref <pretrained_model>
+
+# peft_module_names: []
+  #- "detector"
+
+train_dataloader: !apply:latent_aug_wm.dataset.mel_dataset.get_combine_dataloader
+  ref_wav_file: !ref <train_ref_wav_file>
+  gen_txt_fname: !ref <train_gen_txt_fname>
+  mel_spec_kwargs: !ref <mel_spec_kwargs>
+  tmp_dir: !ref <tmp_dir>
+  shuffle: True
+  unsorted_batch_size: !ref <unsorted_batch_size>
+  batch_size: !ref <train_batch_size>
+  allowed_padding: !ref <allowed_padding>
+  steps_per_epoch: !ref <steps_per_epoch>
+
+val_dataloader: !apply:latent_aug_wm.dataset.mel_dataset.get_combine_dataloader
+  ref_wav_file: !ref <val_ref_wav_file>
+  gen_txt_fname: !ref <val_gen_txt_fname>
+  mel_spec_kwargs: !ref <mel_spec_kwargs>
+  tmp_dir: !ref <tmp_dir>
+  shuffle: False
+  unsorted_batch_size: !ref <unsorted_batch_size>
+  batch_size: !ref <val_batch_size>
+  allowed_padding: !ref <allowed_padding>
+  steps_per_epoch: !ref <eval_step_per_epoch>
+
+
+f5tts: !new:latent_aug_wm.f5_infer.infer.F5TTSBatchInferencer
+  device: !ref <device>
+  train: !ref <is_train>
+  inference_kwargs: !ref <inference_kwargs>
+
+#noise_encoder: !apply:latent_aug_wm.f5_infer.forward_backward.load_peft_f5tts_linear
+#noise_encoder: !apply:latent_aug_wm.f5_infer.forward_backward.load_peft_f5tts_q_k
+# noise_encoder: !apply:latent_aug_wm.f5_infer.forward_backward.load_peft_f5tts_full_transformer_block
+#   - !copy <f5tts>
+
+noise_encoder: !apply:latent_aug_wm.f5_infer.infer.load_cfm
+  use_ema: true
+  bf16: !ref <fp16>
+
+noise_encoder_remove_grad: !apply:latent_aug_wm.trainer.base.Trainer.set_module_require_grad
+  model: !ref <noise_encoder>
+  target: false
+
+# detector: !new:latent_aug_wm.model.decoder.BaseAudioSealClassifier
+#   input_dim: 1
+
+# detector: !apply:latent_aug_wm.model.w2vdetector.create_w2v_encoder_peft
+#   #model_name: "facebook/wav2vec2-base-960h"
+#   model_name: "facebook/wav2vec2-xls-r-300m"
+
+detector: !apply:latent_aug_wm.model.w2vdetector.create_w2v_encoder
+  #model_name: "facebook/wav2vec2-base-960h"
+  model_name: "facebook/wav2vec2-xls-r-300m" 
+
+classifier: !new:latent_aug_wm.model.w2vdetector.SimpleLinearClassifier
+  latent_dim: 1024
+  num_label: 2
+
+
+model: !new:addict.Dict
+  noise_encoder: !ref <noise_encoder>
+  f5tts: !ref <f5tts>
+  detector: !ref <detector>
+  classifier: !ref <classifier>
+
+
+model_device: !apply:latent_aug_wm.trainer.base.Trainer.load_attr_model_to_device
+  - !ref <model>
+  - !ref <device>
+
+
+# lr schduler param
+detector_schduler_params:
+  start_factor: 0.1
+  end_factor: 1.0
+  total_iters: 10
+
+model_lr:
+  detector: !ref <lr>
+  classifier: !ref <lr>
+
+optimizer: !apply:latent_aug_wm.trainer.optimizer.build_optimizer
+  model_dict: !ref <model>
+  scheduler_params_dict:
+    detector: !ref <detector_schduler_params>
+    classifier: !ref <detector_schduler_params>
+  model_lr: !ref <model_lr>
+  
+aug_applier: !new:latent_aug_wm.loss.base.AugApplier
+  aug_obj: !new:latent_aug_wm.data_augmentation.base.BaseBatchAugmentation
+    sampling_rate: !ref <sample_rate>
+    transform_configs: !ref <transform_configs>
+    add_no_aug: false
+  target_keys:
+    - wm_gr_wave
+    - rand_gr_wave
+
+#forward_backward_f5_loss_fn: !new:latent_aug_wm.loss.f5_latent_aug.F5TTSForwardBackwardNoiseAug
+forward_backward_f5_loss_fn: !new:latent_aug_wm.loss.f5_latent_aug.F5TTSForwardBackwardNoiseAugV2
+  inference_kwargs: !ref <inference_kwargs>
+  aug_weighted: 0.1
+  no_update: True
+
+w2v_latent_detector_loss: !new:latent_aug_wm.loss.curriculum.W2VDetectorStageLoss
+  initially_sampling_rate: 24000
+  w2v_sampling_rate: 16000
+
+# scaled_noise_reg_L1_loss: !apply:latent_aug_wm.loss.loss_fn_add_per_step_scaling
+#   loss_fn: !name:latent_aug_wm.loss.f5_latent_aug.noise_reg_L1_loss
+#   initial_scale: 0.0
+#   start_step: 0
+#   final_step: 500
+
+eval_l1_loss: !apply:latent_aug_wm.loss.create_eval_only_loss_fn
+  loss_fn: !name:latent_aug_wm.loss.f5_latent_aug.noise_reg_L1_loss
+
+loss_fn: !apply:latent_aug_wm.loss.construct_loss_fn
+  list_of_fn:
+    - !ref <forward_backward_f5_loss_fn>
+    - !ref <eval_l1_loss>
+    - !name:latent_aug_wm.loss.f5_latent_aug.generate_multiple_mel_from_f5tts_with_aug_noise
+    - !ref <aug_applier>
+    - !ref <w2v_latent_detector_loss>
+
+log_fn: !apply:latent_aug_wm.logging_utils.construct_logging_fn
+  list_of_fn:
+    - !name:latent_aug_wm.logging_utils.audio_utils.log_mel_from_batch
+    - !name:latent_aug_wm.logging_utils.audio_utils.log_audio_from_batch
+
+metrics: !apply:latent_aug_wm.logging_utils.construct_full_epoch_metrics
+  list_of_metric:
+    - !new:latent_aug_wm.logging_utils.metrics.BinaryF1Metric
+      - null
+    - !new:latent_aug_wm.logging_utils.metrics.BinaryPrecisionMetric
+      - null
+
+trainer: !new:latent_aug_wm.trainer.base.Trainer
+  args: !ref <training_args>
+  model: !ref <model>
+  #model_ema: !ref <model_ema>
+  model_ema: null #!ref <model_ema>
+  optimizer: !ref <optimizer>
+  device: !ref <device>
+  train_dataloader: !ref <train_dataloader>
+  val_dataloader: !ref <val_dataloader>
+  initial_steps: 0
+  initial_epochs: 0
+  fp16_run: !ref <fp16>
+  log_audio_batchs: !ref <log_audio_batchs>
+  loss_fn: !ref <loss_fn>
+  log_fn: !ref <log_fn>
+  metrics: !ref <metrics>
+  log_dir: !ref <log_dir> #!ref <checkpoint_dir>/log/
+  checkpoint_dir: !ref <checkpoint_dir>
+  best_measure_by_metric: !ref <best_measure_by_metric>
+  metric_measurement: !ref <metric_measurement>
+  step_per_eval: !ref <step_per_eval>
+
+train:
+  trainer: !ref <trainer>
+  training_kwargs: {}
+  training_args: []

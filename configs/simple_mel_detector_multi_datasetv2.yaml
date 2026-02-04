@@ -1,0 +1,234 @@
+name: simple_detector_v2
+#version: debug_28_audioseal_detector_no_reg_update_scheduler_use_full_transformer_lora
+version: debug_4_new_crop_and_speed
+
+system_root: /home/tst000/projects/tst000
+#all_checkpoint_dir: /home/tst000/projects/checkpoint/latent_aug_wm
+all_checkpoint_dir: !ref <system_root>/checkpoint/latent_aug_wm
+checkpoint_dir: !ref <all_checkpoint_dir>/<name>/version_<version>/
+pretrained_model: "/home/tst000/projects/tst000/checkpoint/latent_aug_wm/simple_detector_v2/version_debug_3_new_crop_and_speed/epoch_00011.pth"
+log_dir: !ref <system_root>/tensorboard_log/latent_aug_wm/<name>/version_<version>/
+tmp_dir: !ref <system_root>/tmp/libriTTS
+
+#override_json_fname: !ref <all_checkpoint_dir>/<name>/version_5/override_keys.json
+
+# training and dataset param
+lr: 5.0e-5
+noise_encoder_lr: 5.0e-5
+train_batch_size: 64
+val_batch_size: 128
+epochs: 10
+unsorted_batch_size: 256
+allowed_padding: 50
+is_train: true
+steps_per_epoch: 10000
+eval_step_per_epoch: null
+step_per_eval: 500
+
+best_measure_by_metric: "f1"
+metric_measurement: "highest" # or lowest
+
+fp16: true
+num_workers: 10
+device: cuda
+save_freq: 50
+log_audio_batchs: 10
+
+# mel param
+sample_rate: 24000
+n_mel_channels: 100
+hop_length: 256
+win_length: 1024
+n_fft: 1024
+
+inference_kwargs:
+  target_rms: 0.1
+  cross_fade_duration: 0.15
+  sway_sampling_coef: -1
+  cfg_strength: 2
+  nfe_step: 32
+
+# augmentation config
+transform_configs:
+  AddColoredNoise:
+    mode: "per_example"
+    p: 1.0
+    min_snr_in_db: 10.0
+    max_snr_in_db: 10.0
+  HighPassFilter:
+    mode: "per_example"
+    p: 1.0
+    min_cutoff_freq: 400
+    max_cutoff_freq: 600
+  LowPassFilter:
+    mode: "per_example"
+    p: 1.0
+    min_cutoff_freq: 8000
+    max_cutoff_freq: 8000
+  Shift:
+    mode: "per_example"
+    p: 1.0
+    min_shift: 0.05
+    max_shift: 0.1
+
+crop_config:
+  #max_length: 10
+  #sampling_rate: !ref <sample_rate>
+  max_length: 10.0
+  min_length: 1.0
+  sampling_rate: !ref <sample_rate>
+
+  
+
+# F5TTS params
+mel_spec_kwargs:
+  target_sample_rate: !ref <sample_rate>
+  n_mel_channels: !ref <n_mel_channels>
+  hop_length: !ref <hop_length>
+  win_length: !ref <win_length>
+  n_fft: !ref <n_fft>
+  mel_spec_type: "vocos"
+
+train_periodic_wav_file: !ref <system_root>/official_dataset/fix_latent_detector/f5tts/fix_latent/train_metadata.json
+val_periodic_wav_file: !ref <system_root>/official_dataset/fix_latent_detector/f5tts/fix_latent/eval_metadata.json
+
+train_rand_gen_txt_fname: !ref <system_root>/official_dataset/fix_latent_detector/f5tts/fix_latent/train_rand_latent_metadata.json
+val_rand_gen_txt_fname: !ref <system_root>/official_dataset/fix_latent_detector/f5tts/fix_latent/eval_rand_latent_metadata.json
+
+train_real_dataset_config:
+  metadata_path: !ref <train_rand_gen_txt_fname>
+  target_label: 1
+
+train_fake_dataset_config:
+  metadata_path: !ref <train_periodic_wav_file>
+  target_label: 0
+
+val_real_dataset_config:
+  metadata_path: !ref <val_rand_gen_txt_fname>
+  target_label: 1
+
+val_fake_dataset_config:
+  metadata_path: !ref <val_periodic_wav_file>
+  target_label: 0
+
+train_dataset_configs:
+  - !ref <train_real_dataset_config>
+  - !ref <train_fake_dataset_config>
+
+val_dataset_configs:
+  - !ref <val_real_dataset_config>
+  - !ref <val_fake_dataset_config>
+
+training_args: !new:addict.Dict
+  ema_modules: null
+  # - "detector"
+  save_modules:
+    - "detector"
+  steps_per_epoch: !ref <steps_per_epoch>
+  loss_weights:
+    #mel_reg_l1_loss: 0.0001
+    detector_loss: 1.0
+    #noise_reg_loss: 25.0
+  max_norm: 12.0
+  max_norm_dict:
+    noise_encoder: 12.0
+  pretrained_model: !ref <pretrained_model>
+
+train_dataloader: !apply:latent_aug_wm.dataset.mel_dataset.load_multi_simple_dataloader
+  dataset_cls: !name:dataset.mel_dataset.MelDatasetWithAugV2
+  dataset_configs: !ref <train_dataset_configs>
+  mel_spec_kwargs: !ref <mel_spec_kwargs>
+  sampling_rate: !ref <sample_rate>
+  aug_obj: !ref <aug_obj>
+  batch_size: !ref <train_batch_size>
+  target_rms: 0.1
+
+val_dataloader: !apply:latent_aug_wm.dataset.mel_dataset.load_multi_simple_dataloader
+  dataset_cls: !name:dataset.mel_dataset.MelDatasetWithAugV2
+  dataset_configs: !ref <val_dataset_configs>
+  mel_spec_kwargs: !ref <mel_spec_kwargs>
+  sampling_rate: !ref <sample_rate>
+  aug_obj: !ref <aug_obj>
+  batch_size: !ref <val_batch_size>
+  target_rms: 0.1
+
+#noise_encoder: !apply:latent_aug_wm.f5_infer.forward_backward.load_peft_f5tts_linear
+#noise_encoder: !apply:latent_aug_wm.f5_infer.forward_backward.load_peft_f5tts_q_k
+# noise_encoder: !apply:latent_aug_wm.f5_infer.forward_backward.load_peft_f5tts_full_transformer_block
+#   - !copy <f5tts>
+
+detector: !new:latent_aug_wm.model.starganv2.StarGanDetector
+  dim_in: !ref <n_mel_channels>
+
+model: !new:addict.Dict
+  detector: !ref <detector>
+
+model_device: !apply:latent_aug_wm.trainer.base.Trainer.load_attr_model_to_device
+  - !ref <model>
+  - !ref <device>
+
+
+# lr schduler param
+detector_schduler_params:
+  start_factor: 0.1
+  end_factor: 1.0
+  total_iters: 10
+
+model_lr:
+  detector: !ref <lr>
+
+optimizer: !apply:latent_aug_wm.trainer.optimizer.build_optimizer
+  model_dict: !ref <model>
+  scheduler_params_dict:
+    detector: !ref <detector_schduler_params>
+  model_lr: !ref <model_lr>
+
+aug_obj: !new:latent_aug_wm.data_augmentation.base.BaseBatchAugmentation
+  sampling_rate: !ref <sample_rate>
+  transform_configs: !ref <transform_configs>
+  add_no_aug: true
+  crop_config: !ref <crop_config>
+
+loss_fn: !apply:latent_aug_wm.loss.construct_loss_fn
+  list_of_fn:
+    - !name:latent_aug_wm.loss.simple_detector.simple_classification_loss
+
+log_fn: !apply:latent_aug_wm.logging_utils.construct_logging_fn
+  list_of_fn:
+    - !name:latent_aug_wm.logging_utils.audio_utils.log_mel_from_batch
+    - !name:latent_aug_wm.logging_utils.audio_utils.log_audio_from_batch
+
+metrics: !apply:latent_aug_wm.logging_utils.construct_full_epoch_metrics
+  list_of_metric:
+    - !new:latent_aug_wm.logging_utils.metrics.BinaryF1Metric
+      - null
+    - !new:latent_aug_wm.logging_utils.metrics.BinaryPrecisionMetric
+      - null
+
+trainer: !new:latent_aug_wm.trainer.base.Trainer
+  args: !ref <training_args>
+  model: !ref <model>
+  #model_ema: !ref <model_ema>
+  model_ema: null #!ref <model_ema>
+  optimizer: !ref <optimizer>
+  device: !ref <device>
+  train_dataloader: !ref <train_dataloader>
+  val_dataloader: !ref <val_dataloader>
+  initial_steps: 0
+  initial_epochs: 0
+  fp16_run: !ref <fp16>
+  log_audio_batchs: !ref <log_audio_batchs>
+  loss_fn: !ref <loss_fn>
+  log_fn: !ref <log_fn>
+  metrics: !ref <metrics>
+  log_dir: !ref <log_dir> #!ref <checkpoint_dir>/log/
+  checkpoint_dir: !ref <checkpoint_dir>
+  best_measure_by_metric: !ref <best_measure_by_metric>
+  metric_measurement: !ref <metric_measurement>
+  step_per_eval: !ref <step_per_eval>
+  max_eval_step: !ref <eval_step_per_epoch>
+
+train:
+  trainer: !ref <trainer>
+  training_kwargs: {}
+  training_args: []
