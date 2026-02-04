@@ -1,3 +1,4 @@
+import json
 import os
 from tqdm import tqdm
 import random
@@ -31,6 +32,13 @@ def get_ref_text_from_wav(wav_path):
     text_fname = wav_parent / f"{wav_name}.normalized.txt"
     with open(text_fname, "r") as f:
         ref_text = f.readline().replace("\n", "")
+
+        if not ref_text.endswith(". ") and not ref_text.endswith("。"):
+            if ref_text.endswith("."):
+                ref_text += " "
+            else:
+                ref_text += ". "
+
     return ref_text
 
 
@@ -191,6 +199,129 @@ class MelDataset(Dataset):
         return ref_audio, ref_text
 
 
+class MelDatasetWithAug(Dataset):
+    def __init__(
+        self,
+        wav_fname_file,
+        mel_spec_kwargs={},
+        use_mp3=True,
+        mp3_prob=0.1,
+        sampling_rate=24000,
+        target_label=0,
+        target_rms=0.1,
+        fname_aug_fn=None,
+        aug_obj=None,
+    ):
+        self.data = self._get_all_wav_text(wav_fname_file)
+        self.aug_obj = aug_obj
+        self.use_mp3 = use_mp3
+        self.mp3_prob = mp3_prob
+        self.mel_spec = MelSpec(**mel_spec_kwargs)
+        self.sampling_rate = sampling_rate
+        self.target_rms = target_rms
+        self.target_label = target_label
+        self.fname_aug_fn = fname_aug_fn
+
+    def _get_mp3(self, wav_path):
+        mp3_path = wav_path.parent / (wav_path.name.split(".")[0] + ".mp3")
+        return mp3_path
+
+    def _get_all_wav_text(self, wav_file):
+        with open(wav_file, "r") as f:
+            all_wav_files = [Path(line.rstrip()) for line in f]
+        return all_wav_files
+
+    def load_audio(self, audio_wav):
+        audio, sr = torchaudio.load(audio_wav)
+        if sr != self.sampling_rate:
+            resampler = torchaudio.transforms.Resample(sr, self.sampling_rate)
+            audio = resampler(audio)
+        rms = torch.sqrt(torch.mean(torch.square(audio)))
+        if rms < self.target_rms:
+            audio = audio * self.target_rms / rms
+        if sr != self.sampling_rate:
+            resampler = torchaudio.transforms.Resample(sr, self.sampling_rate)
+            audio = resampler(audio)
+        return audio, sr
+
+    def __len__(self):
+        return len(self.data)
+
+    @staticmethod
+    def collation(batch):
+        audio_mel = [b["audio_mel"][0] for b in batch]
+        labels = [b["label"] for b in batch]
+        labels = torch.tensor(labels, dtype=torch.long)
+        audio_mel = pad_sequence(audio_mel, batch_first=True)
+
+        audios = [b["audio_wave"][0] for b in batch]
+        audios = pad_sequence(audios, batch_first=True)
+        return {"audio_mel": audio_mel, "audio_wave": audios, "label": labels}
+
+    def __getitem__(self, index):
+        wav_fname = self.data[index]
+        if self.fname_aug_fn is not None:
+            wav_fname = self.fname_aug_fn(wav_fname)
+        if not self.use_mp3 or random.uniform(0, 1) > self.mp3_prob:
+            audio, sr = self.load_audio(wav_fname)
+        else:
+            mp3_fname = self._get_mp3(wav_fname)
+            audio, sr = self.load_audio(mp3_fname)
+        if self.aug_obj is not None:
+            audio = self.aug_obj(audio.unsqueeze(1)).squeeze(1)
+        audio_mel = self.mel_spec(audio)
+        audio_mel = audio_mel.permute(0, 2, 1)
+        assert audio_mel.shape[-1] == self.mel_spec.n_mel_channels
+        return {"audio_mel": audio_mel, "audio_wave": audio, "label": self.target_label}
+
+
+class MelDatasetWithAugV2(MelDatasetWithAug):
+    """
+    generalize with updated metadata
+    """
+
+    def __init__(
+        self,
+        metadata=None,
+        metadata_path=None,
+        mel_spec_kwargs={},
+        sampling_rate=24000,
+        target_label=0,
+        target_rms=0.1,
+        fname_aug_fn=None,
+        aug_obj=None,
+    ):
+        if metadata is None:
+            self.data = json.load(open(metadata_path, "r"))
+        else:
+            self.data = metadata
+        self.aug_obj = aug_obj
+
+        self.mel_spec = MelSpec(**mel_spec_kwargs)
+        self.sampling_rate = sampling_rate
+        self.target_rms = target_rms
+        self.target_label = target_label
+        self.fname_aug_fn = fname_aug_fn
+
+    def __getitem__(self, index):
+        metadata = self.data[index]
+        # choose from mp3 mp4 or wav
+        wav_fname = random.choice(metadata["audio_paths"])
+
+        if self.fname_aug_fn is not None:
+            wav_fname = self.fname_aug_fn(wav_fname)
+
+        audio, sr = self.load_audio(wav_fname)
+        if self.aug_obj is not None:
+            audio = self.aug_obj(audio.unsqueeze(1)).squeeze(1)
+
+        audio_mel = self.mel_spec(audio)
+        audio_mel = audio_mel.permute(0, 2, 1)
+
+        assert audio_mel.shape[-1] == self.mel_spec.n_mel_channels
+        return {"audio_mel": audio_mel, "audio_wave": audio, "label": self.target_label}
+
+
 class TextDataset(Dataset):
     def __init__(self, gen_txt_fname):
         self.gen_txt_fname = gen_txt_fname
@@ -319,10 +450,47 @@ def get_combine_dataloader(
     return dataiter
 
 
-if __name__ == "__main__":
-    ref_wav_file = "/home/tst000/projects/datasets/selected_ref_files.txt"
-    gen_txt_fname = "/home/tst000/projects/datasets/selected_gen_text.txt"
+def load_basic_dataloader(
+    real_wav_fname_file, fake_wav_fname_file, mel_spec_kwargs, batch_size=10, **kwargs
+):
+    real_basic_dataset = MelDatasetWithAug(
+        real_wav_fname_file, mel_spec_kwargs=mel_spec_kwargs, target_label=1, **kwargs
+    )
+    fake_basic_dataset = MelDatasetWithAug(
+        fake_wav_fname_file, mel_spec_kwargs=mel_spec_kwargs, target_label=0, **kwargs
+    )
 
+    combine_dataset = torch.utils.data.ConcatDataset(
+        [real_basic_dataset, fake_basic_dataset]
+    )
+    dataloader = DataLoader(
+        combine_dataset,
+        batch_size=batch_size,
+        collate_fn=MelDatasetWithAug.collation,
+        shuffle=True,
+    )
+    return dataloader
+
+
+def load_multi_simple_dataloader(
+    dataset_configs, batch_size=10, dataset_cls=MelDatasetWithAug, **kwargs
+):
+    datasets = [
+        dataset_cls(**dataset_config, **kwargs) for dataset_config in dataset_configs
+    ]
+
+    combine_dataset = torch.utils.data.ConcatDataset(datasets)
+
+    dataloader = DataLoader(
+        combine_dataset,
+        batch_size=batch_size,
+        collate_fn=MelDatasetWithAug.collation,
+        shuffle=True,
+    )
+    return dataloader
+
+
+if __name__ == "__main__":
     mel_spec_kwargs = {
         "target_sample_rate": 24000,
         "n_mel_channels": 100,
@@ -331,21 +499,50 @@ if __name__ == "__main__":
         "n_fft": 1024,
         "mel_spec_type": "vocos",
     }
-    tmp_dir = "/home/tst000/projects/tmp/libriTTS"
-
-    data_iter = get_combine_dataloader(
-        ref_wav_file=ref_wav_file,
-        gen_txt_fname=gen_txt_fname,
-        mel_spec_kwargs=mel_spec_kwargs,
-        tmp_dir="/home/tst000/projects/tmp/libriTTS",
-        shuffle=False,
-        unsorted_batch_size=2048,
-        batch_size=32,
+    wav_fname_file = (
+        "/home/tst000/projects/tst000/datasets/f5tts_dataset_periodic_train_dataset.txt"
     )
+    basic_dataset = MelDatasetWithAug(wav_fname_file, mel_spec_kwargs=mel_spec_kwargs)
+    fake_basic_dataset = MelDatasetWithAug(
+        wav_fname_file, mel_spec_kwargs=mel_spec_kwargs, target_label=1
+    )
+    combine_dataset = torch.utils.data.ConcatDataset(
+        [basic_dataset, fake_basic_dataset]
+    )
+    dataloader = DataLoader(
+        combine_dataset,
+        batch_size=10,
+        collate_fn=MelDatasetWithAug.collation,
+        shuffle=True,
+    )
+    print(next(iter(dataloader)))
 
-    for i, result in enumerate(tqdm.tqdm(data_iter)):
-        print("lens afterward", result["lens"])
-        # print(pad_sequence(result["cond"], batch_first=True).shape)
-        print("dur: ", result["durations"])
-        if i > 50:
-            break
+    # ref_wav_file = "/home/tst000/projects/datasets/selected_ref_files.txt"
+    # gen_txt_fname = "/home/tst000/projects/datasets/selected_gen_text.txt"
+
+    # mel_spec_kwargs = {
+    #     "target_sample_rate": 24000,
+    #     "n_mel_channels": 100,
+    #     "hop_length": 256,
+    #     "win_length": 1024,
+    #     "n_fft": 1024,
+    #     "mel_spec_type": "vocos",
+    # }
+    # tmp_dir = "/home/tst000/projects/tmp/libriTTS"
+
+    # data_iter = get_combine_dataloader(
+    #     ref_wav_file=ref_wav_file,
+    #     gen_txt_fname=gen_txt_fname,
+    #     mel_spec_kwargs=mel_spec_kwargs,
+    #     tmp_dir="/home/tst000/projects/tmp/libriTTS",
+    #     shuffle=False,
+    #     unsorted_batch_size=2048,
+    #     batch_size=32,
+    # )
+
+    # for i, result in enumerate(tqdm.tqdm(data_iter)):
+    #     print("lens afterward", result["lens"])
+    #     # print(pad_sequence(result["cond"], batch_first=True).shape)
+    #     print("dur: ", result["durations"])
+    #     if i > 50:
+    #         break

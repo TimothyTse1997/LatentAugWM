@@ -47,11 +47,16 @@ class Trainer(object):
         log_fn=None,
         metrics=None,
         log_dir="./",
+        checkpoint_dir=None,
         best_measure_by_metric="f1",
         metric_measurement="highest",  # or lowest
         step_per_eval=100,
+        max_eval_step=None,
         **kwargs,
     ):
+        self.checkpoint_dir = checkpoint_dir
+        if not checkpoint_dir:
+            self.checkpoint_dir = log_dir
         self.args = args
         self.steps = initial_steps
         self.epochs = initial_epochs
@@ -73,6 +78,7 @@ class Trainer(object):
         self.best_eval_result = None
         self.metric_measurement = metric_measurement
         self.step_per_eval = step_per_eval
+        self.max_eval_step = max_eval_step
 
         self.log_dir = log_dir
 
@@ -81,7 +87,7 @@ class Trainer(object):
         self.logger = Trainer._config_logging(self.log_dir)
         self.writer = Trainer._config_tensorboard(self.log_dir)
 
-        if self.args.get("pretrained_model", "") != "":
+        if self.args.get("pretrained_model", None) is not None:
             self.load_checkpoint(
                 self.args["pretrained_model"],
                 load_only_params=self.args.get("load_only_params", True),
@@ -108,6 +114,11 @@ class Trainer(object):
         return writer
 
     @staticmethod
+    def set_module_require_grad(model, target=False):
+        for k, v in model.named_parameters():
+            v.requires_grad = target
+
+    @staticmethod
     def _config_logging(log_dir):
         # write logs
         open(osp.join(log_dir, "train.log"), "w").close()
@@ -124,7 +135,6 @@ class Trainer(object):
             _ = v.zero_grad()
 
     def save_checkpoint(self, checkpoint_path):
-        return
         """Save checkpoint.
         Args:
             checkpoint_path (str): Checkpoint path to be saved.
@@ -147,9 +157,27 @@ class Trainer(object):
 
         if not os.path.exists(os.path.dirname(checkpoint_path)):
             os.makedirs(os.path.dirname(checkpoint_path))
+
         torch.save(state_dict, checkpoint_path)
 
     def load_checkpoint(self, checkpoint_path, load_only_params=False):
+
+        print(f"loading checkpoint from {checkpoint_path}")
+
+        if isinstance(checkpoint_path, str):
+            self._load_checkpoint(checkpoint_path, load_only_params)
+        elif isinstance(checkpoint_path, list):
+            for p in checkpoint_path:
+                # for multiple pretrain model, we can only load weights
+                self._load_checkpoint(p, load_only_params=True)
+        else:
+            for k, p in checkpoint_path.items():
+                # for multiple pretrain model, we can only load weights
+                self._load_checkpoint(p, load_only_params=True, specify_model_keys=[k])
+
+    def _load_checkpoint(
+        self, checkpoint_path, load_only_params=False, specify_model_keys=None
+    ):
         """Load checkpoint.
 
         Args:
@@ -157,16 +185,23 @@ class Trainer(object):
             load_only_params (bool): Whether to load only model parameters.
 
         """
+
         state_dict = torch.load(checkpoint_path, map_location="cpu")
         for key in self.model:
             if not key in state_dict["model"]:
                 continue
+            if (specify_model_keys is not None) and not (key in specify_model_keys):
+                continue
+
+            print(f"loading module {key} from {checkpoint_path}")
             self._load(state_dict["model"][key], self.model[key])
 
         if self.model_ema is not None:
             for key in self.model_ema:
 
                 if not key in state_dict["model_ema"]:
+                    continue
+                if (specify_model_keys is not None) and not (key in specify_model_keys):
                     continue
                 self._load(state_dict["model_ema"][key], self.model_ema[key])
 
@@ -228,10 +263,23 @@ class Trainer(object):
         return lr
 
     @staticmethod
-    def moving_average(model, model_test, beta=0.999):
-        for param_name, param in model.parameters.items():
-            param_test = model_test.parameters[param_name]
-            param_test.data = torch.lerp(param.data, param_test.data, beta)
+    def _moving_average(model, model_test, beta=0.999):
+        current_param_dict = {
+            param_name: param for param_name, param in model.named_parameters()
+        }
+        ema_param_dict = {
+            param_name: param for param_name, param in model_test.named_parameters()
+        }
+        for k, current_param in current_param_dict.items():
+            ema_param_param = ema_param_dict[k]
+            # param_test = model_test.parameters[param_name]
+            # param_test.data = torch.lerp(param.data, param_test.data, beta)
+            ema_param_param.data.lerp_(current_param, beta)
+
+    def moving_average(self, module_name, beta=0.999):
+        self._moving_average(
+            self.model[module_name], self.model_ema[module_name], beta=beta
+        )
 
         # for param, param_test in zip(model.parameters(), model_test.parameters()):
         #     param_test.data = torch.lerp(param.data, param_test.data, beta)
@@ -287,6 +335,8 @@ class Trainer(object):
             loss, losses_ref, used_modules = self.loss_fn(
                 self.model, self.args.loss_weights, batch, step=self.steps, eval=False
             )
+        if torch.isnan(loss):
+            return losses_ref
         loss.backward()
         # for n, p in self.model.noise_encoder.named_parameters():
         #     if p.requires_grad:
@@ -295,6 +345,8 @@ class Trainer(object):
         for m in used_modules:
             # self.optimizer.step(m, scaler=scaler)
             max_norm = self.args.get("max_norm", 12.0)
+            if self.args.get("max_norm_dict", None) and m in self.args["max_norm_dict"]:
+                max_norm = self.args["max_norm_dict"][m]
             clip_grad_norm_(self.model[m].parameters(), max_norm)
             self.optimizer.step(m)
             model_norm = self.get_grad_norm(m)
@@ -306,9 +358,7 @@ class Trainer(object):
             and self.model_ema is not None
         ):
             for module_name in self.args.ema_modules:
-                self.moving_average(
-                    self.model["module_name"], self.model_ema["module_name"], beta=0.999
-                )
+                self.moving_average(module_name, beta=0.999)
 
         self.optimizer.scheduler()
 
@@ -349,6 +399,7 @@ class Trainer(object):
             ) is not None and train_steps_per_epoch > self.args.get("steps_per_epoch"):
                 break
             if self.steps % self.step_per_eval == 0:
+
                 eval_results = self._eval_epoch(end_of_epoch=False)
                 del eval_results
 
@@ -410,7 +461,7 @@ class Trainer(object):
 
             loss, loss_items, batch_output = self._eval_step(batch)
 
-            eval_losses["total_loss"].append(loss.detach().cpu())
+            eval_losses["eval/total_loss"].append(loss.detach().cpu())
 
             for key in loss_items:
                 eval_losses["eval/%s" % key].append(loss_items[key])
@@ -427,7 +478,11 @@ class Trainer(object):
                     self.steps,
                     eval_steps_per_epoch,
                 )
-
+            if (
+                self.max_eval_step is not None
+                and eval_steps_per_epoch > self.max_eval_step
+            ):
+                break
         eval_losses = {key: np.mean(value) for key, value in eval_losses.items()}
 
         # compute metrics
@@ -435,6 +490,8 @@ class Trainer(object):
             # metrics_outcome = self.metrics.write(self.writer, self.epochs)
             metrics_outcome = self.metrics.write(self.writer, self.steps)
             eval_losses.update(metrics_outcome)
+        for k, v in eval_losses.items():
+            self.writer.add_scalar(k, v, self.steps)
 
         _ = [self.model[k].train() for k in self.model]
 
@@ -444,7 +501,6 @@ class Trainer(object):
         return eval_losses
 
     def check_eval_and_save_checkpoint(self, eval_results):
-
         save_checkpoint = True
 
         if self.best_measure_by_metric is not None:
@@ -464,13 +520,16 @@ class Trainer(object):
                 )
                 save_checkpoint = False
 
-        if save_checkpoint:
-            self.save_checkpoint(
-                osp.join(
-                    self.log_dir,
-                    f"epoch_{self.epochs}_step_{self.steps}_best_{self.best_measure_by_metric}.pth",
-                )
+        best_eval_result = float(self.best_eval_result)
+        # if save_checkpoint:
+        fname = f"epoch_{self.epochs}_step_{self.steps}_best_{self.best_measure_by_metric}_{best_eval_result}.pth"
+
+        self.save_checkpoint(
+            osp.join(
+                self.checkpoint_dir,
+                fname,
             )
+        )
 
     def fit(self):
         save_checkpoint = True
@@ -499,4 +558,6 @@ class Trainer(object):
                     save_checkpoint = False
 
             if (epoch % self.args.get("save_freq", 1)) == 0:
-                self.save_checkpoint(osp.join(self.log_dir, "epoch_%05d.pth" % epoch))
+                self.save_checkpoint(
+                    osp.join(self.checkpoint_dir, "epoch_%05d.pth" % epoch)
+                )

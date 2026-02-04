@@ -419,6 +419,17 @@ class Discriminator2d(nn.Module):
         return out
 
 
+class StarGanDetector(Discriminator2d):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.loss_fn = nn.CrossEntropyLoss()
+
+    def calculate_loss(self, x, labels):
+        out = self.get_feature(x)
+        loss = self.loss_fn(out, labels)
+        return out, loss
+
+
 def build_model(args, F0_model, ASR_model):
     generator = Generator(
         args.dim_in,

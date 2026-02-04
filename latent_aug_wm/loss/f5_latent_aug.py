@@ -7,7 +7,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from latent_aug_wm.f5_infer.forward_backward import sample_from_model
+from latent_aug_wm.f5_infer.forward_backward import (
+    sample_from_model,
+    forward_backward_sample_from_model,
+)
 
 l1_loss = nn.L1Loss()
 l2_loss = nn.MSELoss()
@@ -70,7 +73,8 @@ class F5TTSForwardBackwardNoiseAug:
         self.aug_weighted = aug_weighted
 
     def __call__(self, nets=None, step=None, eval=False, **kwargs):
-        random_noise = nets.f5tts.ema_model.get_initial_noise(**kwargs)
+        # random_noise = nets.f5tts.ema_model.get_initial_noise(**kwargs)
+        random_noise = nets.noise_encoder.get_initial_noise(**kwargs).detach()
         # only works if nets.noise_encoder was created via
         # latent_aug_wm.f5_infer.forward_backward.load_peft_f5tts_linear
 
@@ -115,6 +119,38 @@ class F5TTSForwardBackwardNoiseAug:
         )
 
 
+class F5TTSForwardBackwardNoiseAugV2(F5TTSForwardBackwardNoiseAug):
+    def __init__(self, *args, custom_t=[0.0, 0.0039, 0.0], **kwargs):
+        super().__init__(*args, **kwargs)
+        self.custom_t = custom_t
+
+    def __call__(self, nets=None, step=None, eval=False, **kwargs):
+        # random_noise = nets.f5tts.ema_model.get_initial_noise(**kwargs)
+        random_noise = nets.noise_encoder.get_initial_noise(**kwargs).detach()
+
+        aug_noise, _ = forward_backward_sample_from_model(
+            fix_noise=random_noise,
+            model=nets.noise_encoder,
+            inference_kwargs=self.inference_kwargs,
+            # forward_backward_step=2,
+            cache=False,
+            custom_t=self.custom_t,
+            # use_grad_checkpoint=True,
+            **kwargs,
+        )
+        del _
+        norm_aug_noise = aug_noise.clamp(min=-7.0, max=7.0)
+
+        return (
+            {
+                "orig_noise": random_noise,
+                "aug_noise": norm_aug_noise,
+                # "orig_inv_noise": norm_orig_inv_noise,
+            },
+            ["noise_encoder"],
+        )
+
+
 def len_to_mask(lens, max_dur):
 
     batch_size = int(lens.shape[0])
@@ -124,7 +160,7 @@ def len_to_mask(lens, max_dur):
     return mask
 
 
-def noise_reg_L1_loss(nets=None, step=None, scale=None, **kwargs):
+def noise_reg_L1_loss(nets=None, step=None, scale=None, eval=False, **kwargs):
     # orig_noise = kwargs["orig_inv_noise"]
     # nets.f5tts.set_require_grad()
     orig_noise = kwargs["orig_noise"]
@@ -144,7 +180,15 @@ def noise_reg_L1_loss(nets=None, step=None, scale=None, **kwargs):
     noise_reg_loss = l1_loss(aug_noise, orig_noise)
     if scale is not None:
         noise_reg_loss = noise_reg_loss * scale
-    return {"noise_reg_loss": noise_reg_loss}, []
+
+    if not eval:
+        return {"noise_reg_loss": noise_reg_loss}, []
+    aug_diff_mel = (orig_noise - aug_noise).detach().cpu()
+    return {
+        "aug_diff_mel": aug_diff_mel,
+        "aug_noise_mel": aug_noise,
+        "noise_reg_loss": noise_reg_loss,
+    }, []
 
 
 def noise_reg_L2_loss(nets=None, step=None, scale=None, **kwargs):
@@ -309,6 +353,11 @@ if __name__ == "__main__":
         "n_fft": 1024,
         "mel_spec_type": "vocos",
     }
+
+    from f5_tts.model.modules import MelSpec
+
+    mel_spec = MelSpec(**mel_spec_kwargs)
+
     libriTTS_tmp_dir = tmp_dir + "libriTTS"
 
     data_iter = get_combine_dataloader(
@@ -324,12 +373,32 @@ if __name__ == "__main__":
 
     batch = next(data_iter)
     batch = {k: (b.to("cuda") if torch.is_tensor(b) else b) for k, b in batch.items()}
+
+    print(batch["cond"].shape)
+    length = batch["cond"].shape[1]
+    f5tts = F5TTSBatchInferencer(device="cuda")
+    ref_audio = f5tts.vocoder.decode(batch["cond"].permute(0, 2, 1))
+
+    print(ref_audio.shape)
+    print(length * (256 + 1) + 1024)
+    masked_audio = mask_audio(batch["lens"], ref_audio.shape[1], ref_audio)
+    print(masked_audio.shape)
+    import torchaudio
+
+    for i, (text, ma) in enumerate(zip(batch["text"], masked_audio)):
+        fname = f"masked_audio_{i}.wav"
+        print("".join(text), fname)
+        torchaudio.save(
+            fname, ma.detach().float().cpu().unsqueeze(0), sample_rate=24000
+        )
+
+    exit()
     lens = batch["lens"][0]
 
     test_seq_length = 2000
     test_mask = len_to_mask(batch["lens"], test_seq_length)
 
-    f5tts = F5TTSBatchInferencer(device="cuda")
+    # f5tts = F5TTSBatchInferencer(device="cuda")
     noise_encoder = load_peft_f5tts_linear(f5tts)
 
     nets = addict.Dict({"f5tts": f5tts, "noise_encoder": noise_encoder})

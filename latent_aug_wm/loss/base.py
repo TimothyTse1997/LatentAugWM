@@ -85,8 +85,10 @@ def detector_loss(nets=None, step=None, scale=1.0, **kwargs):
 
 
 class AugApplier:
-    def __init__(self, aug_obj: BaseBatchAugmentation):
-        self.target_keys = ["rand_gr_wave", "wm_gr_wave"]
+    def __init__(
+        self, aug_obj: BaseBatchAugmentation, target_keys=["rand_gr_wave", "wm_gr_wave"]
+    ):
+        self.target_keys = target_keys
         self.aug_obj = aug_obj
 
     def __call__(self, nets=None, step=None, scale=None, eval=False, **kwargs):

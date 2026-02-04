@@ -1,5 +1,6 @@
 # custom
 latent_aug_wm/third_party
+experiments
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

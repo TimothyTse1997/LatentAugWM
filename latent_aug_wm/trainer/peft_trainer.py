@@ -39,21 +39,23 @@ class PeftTrainer(Trainer):
 
         self.peft_module_names = peft_module_names
 
-    def _get_state_dict(self, module_name, module):
-        if module_name in self.peft_module_names:
-            return get_peft_model_state_dict(module)
-        return module.state_dict()
+    # def _get_state_dict(self, module_name, module):
+    #     if module_name in self.peft_module_names:
+    #         return get_peft_model_state_dict(module)
+    #     return module.state_dict()
 
-    def save_checkpoint(self, checkpoint_path):
+    def save_checkpoint(self, checkpoint_path, peft_checkpoint_path={}):
         """Save checkpoint.
         Args:
             checkpoint_path (str): Checkpoint path to be saved.
         """
 
         model_state_dicts = {
-            key: self._get_state_dict(key, self.model[key])
+            key: self.model[key].state_dict()
             for key in self.args.save_modules
+            if (key not in self.peft_module_names)
         }
+
         state_dict = {
             "optimizer": self.optimizer.state_dict(),
             "steps": self.steps,
@@ -62,15 +64,35 @@ class PeftTrainer(Trainer):
         }
         if self.model_ema is not None:
             ema_model_state_dicts = {
-                key: self.model_ema[key].state_dict for key in self.args.save_modules
+                key: self.model_ema[key].state_dict
+                for key in self.args.save_modules
+                if (key not in self.args.peft_module_names)
             }
-            state_dict["model_ema"] = ema_model_state_dicts
+            if ema_model_state_dicts:
+                state_dict["model_ema"] = ema_model_state_dicts
 
         if not os.path.exists(os.path.dirname(checkpoint_path)):
             os.makedirs(os.path.dirname(checkpoint_path))
         torch.save(state_dict, checkpoint_path)
 
-    def load_checkpoint(self, checkpoint_path, load_only_params=False):
+        if not self.peft_module_names:
+            return
+
+        if not peft_checkpoint_path:
+            peft_checkpoint_path = self.create_peft_checkpoint_path(checkpoint_path)
+
+        for peft_key in self.peft_module_names:
+            if peft_key not in self.args.save_modules:
+                continue
+            peft_module = self.model[peft_key]
+            peft_module.save_pretrained(peft_checkpoint_path[peft_key])
+
+    def load_checkpoint(
+        self, checkpoint_path, load_only_params=False, peft_checkpoint_path={}
+    ):
+        # TODO
+        # the loading of peft model isn't as easy as we think
+        # might need a separate function
         """Load checkpoint.
 
         Args:
@@ -83,13 +105,14 @@ class PeftTrainer(Trainer):
             if not key in state_dict["model"]:
                 continue
             if key in self.peft_module_names:
-                self._load_peft(state_dict["model"][key], self.model[key])
+                continue
             else:
                 self._load(state_dict["model"][key], self.model[key])
 
         if self.model_ema is not None:
             for key in self.model_ema:
-
+                if key in self.peft_module_names:
+                    continue
                 if not key in state_dict["model_ema"]:
                     continue
                 self._load(state_dict["model_ema"][key], self.model_ema[key])
@@ -98,6 +121,17 @@ class PeftTrainer(Trainer):
             self.steps = state_dict["steps"]
             self.epochs = state_dict["epochs"]
             self.optimizer.load_state_dict(state_dict["optimizer"])
+
+    def create_peft_checkpoint_path(self, checkpoint_path):
+        peft_checkpoint_path = {}
+        for peft_key in self.peft_module_names:
+            save_dir_name = (
+                Path(checkpoint_path).name.split(".")[0] + f"_peft_{peft_key}"
+            )
+            peft_checkpoint_path[peft_key] = (
+                Path(checkpoint_path).parent / save_dir_name
+            )
+        return peft_checkpoint_path
 
     def _load(self, states, model, force_load=True):
         model_states = model.state_dict()
@@ -124,15 +158,24 @@ class PeftTrainer(Trainer):
                 self.logger.info("not exist :%s" % key)
                 print("not exist ", key)
 
-    def _load_peft(self, states, peft_model, force_load=True):
-        out = set_peft_model_state_dict(peft_model, states)
-        print(out.unexpected_keys)
+    def moving_average(self, module_name, beta=0.999):
+        if module_name in self.peft_module_names:
+            self._moving_average_peft(
+                self.model[module_name], self.model_ema[module_name]
+            )
+        else:
+            self._moving_average(self.model[module_name], self.model_ema[module_name])
 
     @staticmethod
-    def moving_average(model, model_test, beta=0.999):
-        for param_name, param in model.parameters.items():
-            if "lora" in param_name:
-                print(f"skip lora param: {param_name}")
+    def _moving_average_peft(model, model_test, beta=0.999):
+        # TODO:
+        # Lora REALLY don't work with ema, lets try this later ...
+        return
+        skipped_layers = 0
+        for param_name, param in model.named_parameters():
+            if not "lora" in param_name:
+                skipped_layers += 1
                 continue
             param_test = model_test.parameters[param_name]
             param_test.data = torch.lerp(param.data, param_test.data, beta)
+        # self.logger.info(f"ema skipped layers: {skipped_layers}")

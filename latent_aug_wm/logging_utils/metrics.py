@@ -36,23 +36,43 @@ class BinaryF1Metric(BaseMetric):
         real_detector_logits = batch.get("real_detector_logits", None)
         fake_detector_logits = batch.get("fake_detector_logits", None)
 
+        all_pred = []
+        all_labels = []
         if real_detector_logits is not None:
             self.start_update = True
             real_detector_pred = (
                 torch.argmax(real_detector_logits, dim=-1).detach().cpu()
             )
+            real_labels = torch.ones(
+                real_detector_logits.shape[0],
+                dtype=torch.long,
+            )
+            all_pred.append(real_detector_pred)
+            all_labels.append(real_labels)
+
+        if fake_detector_logits is not None:
+            self.start_update = True
             fake_detector_pred = (
                 torch.argmax(fake_detector_logits, dim=-1).detach().cpu()
             )
-            full_pred_labels = (
-                torch.cat((real_detector_pred, fake_detector_pred)).detach().cpu()
-            )
-            labels = torch.zeros(
-                real_detector_logits.shape[0] + fake_detector_logits.shape[0],
+            fake_labels = torch.zeros(
+                fake_detector_pred.shape[0],
                 dtype=torch.long,
             )
-            labels[: real_detector_logits.shape[0]] = 1
-            self.metric.update(full_pred_labels, labels)
+            all_pred.append(fake_detector_pred)
+            all_labels.append(fake_labels)
+
+        if len(all_pred) == 0:
+            return
+        if len(all_pred) == 1:
+            full_pred_labels = all_pred[0].detach().cpu()
+            labels = all_labels[0].detach().cpu()
+
+        if len(all_pred) > 1:
+            full_pred_labels = torch.cat(all_pred).detach().cpu()
+            labels = torch.cat(all_labels).detach().cpu()
+
+        self.metric.update(full_pred_labels, labels)
 
     def reset(self):
         self.start_update = False

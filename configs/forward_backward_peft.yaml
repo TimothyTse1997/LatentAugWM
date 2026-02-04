@@ -1,5 +1,6 @@
 name: forward_backward
-version: debug_25_add_reg_remove_peft_from_ema_l1_reg_scale_detector_no_checkpoint_with_aug_reduce_reg_and_lr_always_aug_change_scheduler_with_grad_clip_no_ema
+#version: debug_28_audioseal_detector_no_reg_update_scheduler_use_full_transformer_lora
+version: debug_50_w2v_detector_with_reg_update_scheduler_use_full_transformer_full_f5tts
 
 system_root: /home/tst000/projects/tst000
 #all_checkpoint_dir: /home/tst000/projects/checkpoint/latent_aug_wm
@@ -12,16 +13,17 @@ tmp_dir: !ref <system_root>/tmp/libriTTS
 #override_json_fname: !ref <all_checkpoint_dir>/<name>/version_5/override_keys.json
 
 # training and dataset param
-lr: 5.0e-3
-train_batch_size: 16
-val_batch_size: 32
+lr: 1.0e-4
+noise_encoder_lr: 1.0e-4
+train_batch_size: 4
+val_batch_size: 64
 epochs: 10
-unsorted_batch_size: 128
+unsorted_batch_size: 256
 allowed_padding: 50
 is_train: true
 steps_per_epoch: 10000
-eval_step_per_epoch: 64
-step_per_eval: 500
+eval_step_per_epoch: 60
+step_per_eval: 600
 
 best_measure_by_metric: "f1"
 metric_measurement: "highest" # or lowest
@@ -75,14 +77,20 @@ training_args: !new:addict.Dict
   save_modules:
     - "noise_encoder"
     - "detector"
+    - "classifier"
   steps_per_epoch: !ref <steps_per_epoch>
   loss_weights:
     #mel_reg_l1_loss: 0.0001
     detector_loss: 1.0
-    noise_reg_loss: 1.0
+    noise_reg_loss: 50.0
+  max_norm: 12.0
+  max_norm_dict:
+    noise_encoder: 12.0
 
+# peft_module_names: []
 peft_module_names:
   - "noise_encoder"
+  #- "detector"
 
 train_dataloader: !apply:latent_aug_wm.dataset.mel_dataset.get_combine_dataloader
   ref_wav_file: !ref <train_ref_wav_file>
@@ -112,16 +120,35 @@ f5tts: !new:latent_aug_wm.f5_infer.infer.F5TTSBatchInferencer
   train: !ref <is_train>
   inference_kwargs: !ref <inference_kwargs>
 
-noise_encoder: !apply:latent_aug_wm.f5_infer.forward_backward.load_peft_f5tts_linear
-  - !copy <f5tts>
+#noise_encoder: !apply:latent_aug_wm.f5_infer.forward_backward.load_peft_f5tts_linear
+#noise_encoder: !apply:latent_aug_wm.f5_infer.forward_backward.load_peft_f5tts_q_k
+# noise_encoder: !apply:latent_aug_wm.f5_infer.forward_backward.load_peft_f5tts_full_transformer_block
+#   - !copy <f5tts>
 
-detector: !new:latent_aug_wm.model.decoder.BaseAudioSealClassifier
-  input_dim: 1
+noise_encoder: !apply:latent_aug_wm.f5_infer.infer.load_cfm
+  use_ema: true
+  bf16: !ref <fp16>
+
+# detector: !new:latent_aug_wm.model.decoder.BaseAudioSealClassifier
+#   input_dim: 1
+
+# detector: !apply:latent_aug_wm.model.w2vdetector.create_w2v_encoder_peft
+#   #model_name: "facebook/wav2vec2-base-960h"
+#   model_name: "facebook/wav2vec2-xls-r-300m"
+
+detector: !apply:latent_aug_wm.model.w2vdetector.create_w2v_encoder
+  #model_name: "facebook/wav2vec2-base-960h"
+  model_name: "facebook/wav2vec2-xls-r-300m" 
+
+classifier: !new:latent_aug_wm.model.w2vdetector.SimpleLinearClassifier
+  latent_dim: 1024
+  num_label: 2
 
 model: !new:addict.Dict
   noise_encoder: !ref <noise_encoder>
   f5tts: !ref <f5tts>
   detector: !ref <detector>
+  classifier: !ref <classifier>
 
 #model_ema: !new:addict.Dict
 #  detector: !copy <detector>
@@ -135,24 +162,34 @@ model_device: !apply:latent_aug_wm.trainer.base.Trainer.load_attr_model_to_devic
 #  - !ref <device>
 
 # lr schduler param
-schduler_params:
-  start_factor: 1.0
+noise_encoder_schduler_params:
+  start_factor: 0.001
   end_factor: 1.0
-  total_iters: 1.0
+  total_iters: 50
+
+detector_schduler_params:
+  start_factor: 0.001
+  end_factor: 1.0
+  total_iters: 1000
+  # start_factor: 0.01
+  # end_factor: 1.0
+  # total_iters: 1000
   # max_lr: !ref <lr>
   # pct_start: 0.0
   # epochs: !ref <epochs>
   # steps_per_epoch: !ref <steps_per_epoch>
 
 model_lr:
-  noise_encoder: !ref <lr>
+  noise_encoder: !ref <noise_encoder_lr>
   detector: !ref <lr>
+  classifier: !ref <lr>
 
 optimizer: !apply:latent_aug_wm.trainer.optimizer.build_optimizer
   model_dict: !ref <model>
   scheduler_params_dict:
-    noise_encoder: !copy <schduler_params>
-    detector: !copy <schduler_params>
+    noise_encoder: !ref <noise_encoder_schduler_params>
+    detector: !ref <detector_schduler_params>
+    classifier: !ref <detector_schduler_params>
   model_lr: !ref <model_lr>
   
 
@@ -162,15 +199,40 @@ aug_applier: !new:latent_aug_wm.loss.base.AugApplier
     transform_configs: !ref <transform_configs>
     add_no_aug: false
 
-forward_backward_f5_loss_fn: !new:latent_aug_wm.loss.f5_latent_aug.F5TTSForwardBackwardNoiseAug
+#forward_backward_f5_loss_fn: !new:latent_aug_wm.loss.f5_latent_aug.F5TTSForwardBackwardNoiseAug
+forward_backward_f5_loss_fn: !new:latent_aug_wm.loss.f5_latent_aug.F5TTSForwardBackwardNoiseAugV2
   inference_kwargs: !ref <inference_kwargs>
   aug_weighted: 0.1
 
+
+
+w2v_latent_detector_loss: !new:latent_aug_wm.loss.w2v.W2VPeftLatentLoss
+  initially_sampling_rate: 24000
+  w2v_sampling_rate: 16000
+
+# scaled_detector_loss: !apply:latent_aug_wm.loss.loss_fn_add_per_step_scaling
+#   loss_fn: !name:latent_aug_wm.loss.base.detector_loss
+#   initial_scale: 0.5
+#   start_step: 0
+#   final_step: 50
+
+delayed_generate_mel: !apply:latent_aug_wm.loss.loss_fn_add_per_step_scaling
+  loss_fn: !name:latent_aug_wm.loss.f5_latent_aug.generate_multiple_mel_from_f5tts_with_aug_noise
+  initial_scale: 0.0
+  start_step: 400
+  final_step: 500
+
+delayed_aug_applier: !apply:latent_aug_wm.loss.loss_fn_add_per_step_scaling
+  loss_fn: !ref <aug_applier>
+  initial_scale: 0.0
+  start_step: 400
+  final_step: 500
+
 scaled_detector_loss: !apply:latent_aug_wm.loss.loss_fn_add_per_step_scaling
-  loss_fn: !name:latent_aug_wm.loss.base.detector_loss
-  initial_scale: 0.5
-  start_step: 100
-  final_step: 200
+  loss_fn: !ref <w2v_latent_detector_loss>
+  initial_scale: 0.0
+  start_step: 400
+  final_step: 500
 
 loss_fn: !apply:latent_aug_wm.loss.construct_loss_fn
   list_of_fn:
@@ -178,9 +240,11 @@ loss_fn: !apply:latent_aug_wm.loss.construct_loss_fn
     - !ref <forward_backward_f5_loss_fn>
     #- !name:latent_aug_wm.loss.f5_latent_aug.noise_reg_L1_loss
     - !name:latent_aug_wm.loss.f5_latent_aug.noise_reg_L1_loss
-    - !name:latent_aug_wm.loss.f5_latent_aug.generate_multiple_mel_from_f5tts_with_aug_noise
+    #- !name:latent_aug_wm.loss.f5_latent_aug.generate_multiple_mel_from_f5tts_with_aug_noise
+    - !ref <delayed_generate_mel>
     #- !name:latent_aug_wm.loss.base.mel_reg_L1_loss
-    - !ref <aug_applier>
+    #- !ref <aug_applier>
+    - !ref <delayed_aug_applier>
     #- !name:latent_aug_wm.loss.base.detector_loss
     - !ref <scaled_detector_loss>
 

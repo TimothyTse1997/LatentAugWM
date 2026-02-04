@@ -46,10 +46,19 @@ def construct_loss_fn(list_of_fn, log_fn_time=False):
     return _loss_fn
 
 
+def create_eval_only_loss_fn(loss_fn):
+    def eval_only_loss_fn(nets=None, step=None, eval=False, **kwargs):
+        if not eval:
+            return kwargs, []
+        return loss_fn(nets=nets, step=step, eval=eval, **kwargs)
+
+    return eval_only_loss_fn
+
+
 def loss_fn_add_per_step_scaling(
     loss_fn=None, initial_scale=0.1, start_step=0, final_step=1000
 ):
-    def modified_loss(nets=None, step=None, **kwargs):
+    def modified_loss(nets=None, step=None, eval=False, **kwargs):
 
         if step is None or step < start_step:
             return kwargs, []
@@ -59,7 +68,7 @@ def loss_fn_add_per_step_scaling(
             current_scale = initial_scale + (1.0 - initial_scale) * (
                 (step - start_step) / (final_step - start_step)
             )
-        return loss_fn(nets=nets, step=step, scale=current_scale, **kwargs)
+        return loss_fn(nets=nets, step=step, scale=current_scale, eval=eval, **kwargs)
 
     return modified_loss
 
@@ -72,6 +81,16 @@ def loss_fn_add_start_step(loss_fn=None, start_step=None):
     def modified_loss(nets=None, step=None, **kwargs):
 
         if step is None or step < start_step:
+            return kwargs
+        return loss_fn(nets=nets, step=step, **kwargs)
+
+    return modified_loss
+
+
+def loss_fn_add_end_step(loss_fn=None, end_step=None):
+    def modified_loss(nets=None, step=None, **kwargs):
+
+        if step is None or step > end_step:
             return kwargs
         return loss_fn(nets=nets, step=step, **kwargs)
 

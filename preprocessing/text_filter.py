@@ -173,6 +173,59 @@ def split_text_dataset(
     # return
 
 
+def split_text_dataset_from_given_files(
+    target_audio_dir,
+    input_train_fname=None,
+    input_test_fname=None,
+    input_eval_fname=None,
+    output_train_fname=None,
+    output_test_fname=None,
+    output_eval_fname=None,
+    suffix=None,
+):
+
+    out_train, out_test, out_eval = [], [], []
+
+    with open(input_train_fname, "r") as f:
+        train_fnames = set([Path(line.rstrip()).name for line in f])
+    with open(input_test_fname, "r") as f:
+        test_fnames = set([Path(line.rstrip()).name for line in f])
+    with open(input_eval_fname, "r") as f:
+        eval_fnames = set([Path(line.rstrip()).name for line in f])
+    print(len(train_fnames), len(test_fnames), len(eval_fnames))
+
+    all_current_audio_file = list(Path(target_audio_dir).glob("*.wav"))
+    assert len(all_current_audio_file) > 0
+    print(len(all_current_audio_file))
+    print(len(all_current_audio_file))
+    print(len(all_current_audio_file))
+    print(len(all_current_audio_file))
+    print(len(all_current_audio_file))
+
+    for audio_fname in all_current_audio_file:
+        original_fname = audio_fname.name.replace(suffix, "")
+
+        if original_fname in train_fnames:
+            out_train.append(str(audio_fname.absolute()))
+        elif original_fname in test_fnames:
+            out_test.append(str(audio_fname.absolute()))
+        elif original_fname in eval_fnames:
+            out_eval.append(str(audio_fname.absolute()))
+
+    print(len(out_train), len(out_test), len(out_eval))
+
+    def save_file_fn(save_file, all_data):
+        assert len(all_data) > 0
+        with open(save_file, "w") as f:
+            for row in all_data:
+                f.write(str(row) + "\n")
+
+    save_file_fn(output_train_fname, out_train)
+    save_file_fn(output_test_fname, out_test)
+    save_file_fn(output_eval_fname, out_eval)
+    # return
+
+
 if __name__ == "__main__":
     # main()
     # create_all_useful_path_for_dataset()
@@ -183,9 +236,47 @@ if __name__ == "__main__":
     #     output_test_fname="/home/tst000/projects/datasets/selected_ref_files_test.txt",
     #     output_eval_fname="/home/tst000/projects/datasets/selected_ref_files_eval.txt",
     # )
-    split_text_dataset(
-        "/home/tst000/projects/datasets/selected_gen_text.txt",
-        output_train_fname="/home/tst000/projects/datasets/selected_gen_text_train.txt",
-        output_test_fname="/home/tst000/projects/datasets/selected_gen_text_test.txt",
-        output_eval_fname="/home/tst000/projects/datasets/selected_gen_text_eval.txt",
+    # all_paths = list(Path("/home/tst000/projects/tst000/datasets/f5tts_random_audio/").glob("*.wav"))
+    # dataset_dir = Path("/home/tst000/projects/tst000/datasets/")
+    # full_fname = "/home/tst000/projects/tst000/datasets/f5tts_random_audio_full.txt"
+    # with open(full_fname, "w") as f:
+    #     for p in tqdm(all_paths):
+    #         f.write(str(p.absolute()) + "\n")
+
+    # split_text_dataset(
+    #     full_fname,
+    #     output_train_fname=str(dataset_dir / "f5tts_random_audio_train.txt"),
+    #     output_test_fname=str(dataset_dir / "f5tts_random_audio_test.txt"),
+    #     output_eval_fname=str(dataset_dir / "f5tts_random_audio_eval.txt"),
+    # )
+    # split_text_dataset_from_given_files(
+    #     target_audio_dir="/home/tst000/projects/tst000/datasets/bigvgan_22k_periodic_gen_audio/",
+    #     input_train_fname="/home/tst000/projects/tst000/datasets/f5tts_dataset_periodic_train_dataset.txt",
+    #     input_test_fname="/home/tst000/projects/tst000/datasets/f5tts_dataset_periodic_test_dataset.txt",
+    #     input_eval_fname="/home/tst000/projects/tst000/datasets/f5tts_dataset_periodic_eval_dataset.txt",
+    #     output_train_fname="/home/tst000/projects/tst000/datasets/bigvgan_22k_periodic_gen_audio_train.txt",
+    #     output_test_fname="/home/tst000/projects/tst000/datasets/bigvgan_22k_periodic_gen_audio_test.txt",
+    #     output_eval_fname="/home/tst000/projects/tst000/datasets/bigvgan_22k_periodic_gen_audio_eval.txt",
+    #     suffix="_bigvgan_22k"
+    # )
+    split_text_dataset_from_given_files(
+        target_audio_dir="/home/tst000/projects/tst000/datasets/hifigan_16k_random_gen_audio/",
+        input_train_fname="/home/tst000/projects/tst000/datasets/f5tts_random_audio_train.txt",
+        input_test_fname="/home/tst000/projects/tst000/datasets/f5tts_random_audio_test.txt",
+        input_eval_fname="/home/tst000/projects/tst000/datasets/f5tts_random_audio_eval.txt",
+        output_train_fname="/home/tst000/projects/tst000/datasets/hifigan_16k_random_audio_train.txt",
+        output_test_fname="/home/tst000/projects/tst000/datasets/hifigan_16k_random_audio_test.txt",
+        output_eval_fname="/home/tst000/projects/tst000/datasets/hifigan_16k_random_audio_eval.txt",
+        suffix="_hifigan_22k",
+    )
+
+    split_text_dataset_from_given_files(
+        target_audio_dir="/home/tst000/projects/tst000/datasets/hifigan_16k_periodic_gen_audio/",
+        input_train_fname="/home/tst000/projects/tst000/datasets/f5tts_dataset_periodic_train_dataset.txt",
+        input_test_fname="/home/tst000/projects/tst000/datasets/f5tts_dataset_periodic_test_dataset.txt",
+        input_eval_fname="/home/tst000/projects/tst000/datasets/f5tts_dataset_periodic_eval_dataset.txt",
+        output_train_fname="/home/tst000/projects/tst000/datasets/hifigan_16k_periodic_gen_audio_train.txt",
+        output_test_fname="/home/tst000/projects/tst000/datasets/hifigan_16k_periodic_gen_audio_test.txt",
+        output_eval_fname="/home/tst000/projects/tst000/datasets/hifigan_16k_periodic_gen_audio_eval.txt",
+        suffix="_hifigan_16k",
     )
